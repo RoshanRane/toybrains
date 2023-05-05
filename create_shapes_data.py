@@ -117,7 +117,7 @@ class ShapesData:
         self.df =  pd.DataFrame()
         self.df.index.name = "subjectID"        
         for gen_var_name, gen_var in self.GEN_PROPS.items():
-            self.df[gen_var_name] = np.nan
+            self.df['gen_'+gen_var_name] = np.nan
             
         print("Generating {} synthetic 'toy brain' images:".format(n_samples))
 
@@ -181,8 +181,8 @@ class ShapesData:
                                      fill=self.get_color_val(props[f'{shape_pos}_int']), 
                                      outline=self.get_color_val(props['border_int']))
             
-            # store the generative properties
-            self.df.loc[f'{subID:05}'] = props 
+            # store the generative properties with a prefix 'gen_'
+            self.df.loc[f'{subID:05}'] = {'gen_'+k:v for k,v in props.items()} 
             # save the data csv every 1000 samples
             if subID//1000 == 0:
                 self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")      
