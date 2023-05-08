@@ -87,7 +87,7 @@ class ShapesData:
         
         # define all the generative properties for the images
         self.GENVARS = {
-            # 1. brain_vol: total volume of the brain pi*radius_minor*radius_major
+            # 1. brain_vol created as a ellipse with a minor and major radius
             # ranging between 1633 to 2261 [(S/2-12)*(S/2-6) to (S/2-8)*(S/2-2)]
             'brain_vol-radminor':_GEN_VAR('brain_vol-rad-minor', 
                                        np.arange(self.I/2 - 12, self.I/2 - 8 + 1, dtype=int)),
@@ -134,6 +134,13 @@ class ShapesData:
             'age' : np.arange(20,80+1),
         }
         
+        # define all labels
+        self.COVARS = {
+            'lbl-bin-shape'      : [True, False]
+            'lbl-bin-shape-bvol' : [True, False]
+            'lbl-bin-shape-vent' : [True, False]
+            'lbl-bin-bvol-vent'  : [True, False]
+        }
     
     def generate_dataset(self, n_samples):
         
@@ -142,7 +149,10 @@ class ShapesData:
         self.df =  pd.DataFrame()
         self.df.index.name = "subjectID"   
         for name,_ in self.GENVARS.items():
-            self.df['gen_' + name] = np.nan
+            if '-rad' in name:
+                self.df['_gen_' + name] = np.nan
+            else:
+                self.df['gen_' + name] = np.nan
         for name,_ in self.COVARS.items():
             self.df['cov_' + name] = np.nan
             
@@ -264,9 +274,20 @@ class ShapesData:
             # store the covariates with a prefix 'cov_'
             for k,v in covars.items():
                 self.df.at[f'{subID:05}', 'cov_'+k] = v
+            # combine the gen params 'brain_vol-radmajor' and 'brain_vol-radminor' into one 'brain_vol'
+            genvars.update({'brain_vol': math.pi*genvars['brain_vol-radmajor']*genvars['brain_vol-radminor'] })
+            # calculate the the volume of all regular_polygon shapes
+            for shape_pos in self.SHAPE_POS.keys():
+                genvars.update({
+                    f'{shape_pos}_vol': 
+                    self.area_of_regular_polygon(
+                        n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
             # store the generative properties with a prefix 'gen_'
             for k,v in genvars.items():
-                self.df.at[f'{subID:05}', 'gen_'+k] = v
+                if '-rad' in k: # radius is stored as the secondary gen variable 
+                    self.df.at[f'{subID:05}', '_gen_'+k] = v
+                else:
+                    self.df.at[f'{subID:05}', 'gen_'+k] = v
             # if debug:  print(f"variable {self.name} with states {self.states} and weights={self.weights}")
             
             # save the data csv every 1000 samples
@@ -275,13 +296,11 @@ class ShapesData:
             
             # Save the image
             image.save(f"{self.IMGS_DIR}{subID:05}.jpg")
-                
+            
+        
         # format the subject IDs same as the filename
         self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")
         
-        
-            # 'brain_vol_states',math.pi*np.meshgrid(gen_rad_width.states, gen_rad_height.states),
-            # 'brain_vol',_GEN_VAR('brain_vol', brain_vol_states),   
         
         
     def get_color_val(self, color):
@@ -291,6 +310,15 @@ class ShapesData:
             val = [int(color) for i in range(3)]
         # print(color, tuple(val))
         return tuple(val)
+    
+    
+    def area_of_regular_polygon(self, n, r):
+        # Calculate the length of each side of the polygon
+        side_length = 2 * r * math.sin(math.pi / n)
+        # Calculate the area of the polygon
+        area = 0.5 * n * side_length * r
+        return area
+
     
         
 #         # define the possible ranges for each generative property
