@@ -18,35 +18,43 @@ import argparse
 class _GEN_VAR:
     def __init__(self, name, states):
         self.name = name
-        self.states = states
+        self.states = np.array(states)
         self.k = len(states)
         self.reset_weights()
         
     def bump_up_weight(self, i, amt=1):
-        assert i<self.k, f"index={i} is invalid for variable {self.name} with states {self.states}"
-        self.weights[i] += amt
-        self._smooth_weights(window=self.k-1)
+        try:
+            self.weights[i] += amt
+        except IndexError as e:
+            print(f"\n[IndexError] index={i} is out-of-bound for variable '{self.name}' \
+with n={self.k} states {self.states} and weights {self.weights}")
+            raise e
+        # min_window = self.k-2 if self.k-2>2 else 2
+        self._smooth_weights()
+        assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
+ Something failed when performing self._smooth_weights()"
         return self
         
     def _smooth_weights(self, window=2):
-        """Smooths a numpy array by taking the average of its neighbouring values within a specified window.
-
+        """Smooths the self.weights numpy array by taking the 
+        average of its neighbouring values within a specified window.
         Args:
-        - arr (numpy array): the array to be smoothed
         - window (int): the window size for smoothing
-
-        Returns: the smoothed array
         """
-        # Pad the array with zeros to handle edge cases
-        arr = np.pad(self.weights, (window//2, window//2), mode='constant', constant_values=1)
+        # Pad the array with ones for the sliding window
+        # for odd len arrays pad differently as opposed to even lenght arrays
+        #  
+        pad = (window//2-1, window//2)
+        arr = np.pad(self.weights, pad, mode='edge')
         # Create a 2D array of sliding windows
         shape = arr.shape[:-1] + (arr.shape[-1]-window+1, window)
         strides = arr.strides + (arr.strides[-1],)
         windows = np.lib.stride_tricks.as_strided(arr, shape=shape, strides=strides)
-        # remove the paddings
-        windows  = windows[window//2-1:-window//2]
+        
         # Take the average of each sliding window to smooth the array
         self.weights = np.mean(windows, axis=1)
+        # remove the paddings
+        # windows  = windows[pad[0]-1:-pad[1]]
         return self
         
     def sample(self):
@@ -54,7 +62,7 @@ class _GEN_VAR:
         return np.random.choice(self.states, p=probas).item()
     
     def reset_weights(self):
-        self.weights = np.ones(self.k, dtype=int)
+        self.weights = np.ones(self.k)
     
     
 class ShapesData:
@@ -166,18 +174,18 @@ class ShapesData:
                     self.GENVARS[var].bump_up_weight(1, amt=2) 
             
             if covars['site']=='siteA':
-                self.GENVARS['brain_int' ].bump_up_weight(0, amt=4) 
+                self.GENVARS['brain_int'].bump_up_weight(0, amt=4) 
                 self.GENVARS['border_int'].bump_up_weight(0, amt=2)
             elif covars['site']=='siteB':
-                self.GENVARS['brain_int' ].bump_up_weight(1, amt=3)
-                self.GENVARS['brain_int' ].bump_up_weight(2, amt=2)
+                self.GENVARS['brain_int'].bump_up_weight(1, amt=3)
+                self.GENVARS['brain_int'].bump_up_weight(2, amt=2)
                 self.GENVARS['border_int'].bump_up_weight(1, amt=2)
             elif covars['site']=='siteC':
-                self.GENVARS['brain_int' ].bump_up_weight(2, amt=2)
-                self.GENVARS['brain_int' ].bump_up_weight(3, amt=4) 
+                self.GENVARS['brain_int'].bump_up_weight(2, amt=2)
+                self.GENVARS['brain_int'].bump_up_weight(3, amt=4) 
                 self.GENVARS['border_int'].bump_up_weight(2, amt=2)
             else:# covars['site']=='siteD':
-                self.GENVARS['brain_int' ].bump_up_weight(4, amt=4) 
+                self.GENVARS['brain_int'].bump_up_weight(4, amt=4) 
                 self.GENVARS['border_int'].bump_up_weight(1, amt=2)
             
             if 20<=covars['age']<=40:
@@ -273,8 +281,7 @@ class ShapesData:
         
         
             # 'brain_vol_states',math.pi*np.meshgrid(gen_rad_width.states, gen_rad_height.states),
-            # 'brain_vol',_GEN_VAR('brain_vol', 
-            #                      brain_vol_states),   
+            # 'brain_vol',_GEN_VAR('brain_vol', brain_vol_states),   
         
         
     def get_color_val(self, color):
@@ -334,13 +341,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--n_samples', default=100, type=int)
-    parser.add_argument('--dir', default='shapes', type=str)
+    parser.add_argument('--dir', default='toybrains', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
     
     IMG_SIZE = 64 # 64 pixels x 64 pixels
+    RANDOM_SEED = 42 if args.debug else None
     # create the output folder
-    dataset = ShapesData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug)   
+    dataset = ShapesData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED)   
     # create the shapes dataset
     dataset.generate_dataset(n_samples=args.n_samples)

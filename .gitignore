@@ -1,3 +1,5 @@
-shapes/
 .ipynb_checkpoints/
 *_checkpoint*
+**/images/*.jpg
+**/labels/*.jpg
+**/toybrains_n*.csv
