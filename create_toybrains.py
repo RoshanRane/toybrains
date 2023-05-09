@@ -22,13 +22,16 @@ class _GEN_VAR:
         self.k = len(states)
         self.reset_weights()
         
-    def bump_up_weight(self, i, amt=1):
-        try:
-            self.weights[i] += amt
-        except IndexError as e:
-            print(f"\n[IndexError] index={i} is out-of-bound for variable '{self.name}' \
-with n={self.k} states {self.states} and weights {self.weights}")
-            raise e
+    def bump_up_weight(self, idxs, amt=1):
+        if not isinstance(idxs, (list,tuple)):
+            idxs = [idxs]
+        for i in idxs:
+            try:
+                self.weights[i] += amt
+            except IndexError as e:
+                print(f"\n[IndexError] index={i} is out-of-bound for variable '{self.name}' \
+    with n={self.k} states {self.states} and weights {self.weights}")
+                raise e
         # min_window = self.k-2 if self.k-2>2 else 2
         self._smooth_weights()
         assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
@@ -98,7 +101,7 @@ class ShapesData:
             # 3. the intensity or brightness of the brain region ranging between 'greyness1' (210) to 'greyness5' (170)
             'brain_int':_GEN_VAR('brain_int', [210,200,190,180,170]), 
             # 4. the intensity or brightness of the ventricles and brain borders ranging between 'blueness1' to 'blueness3' 
-            'border_int':_GEN_VAR('border_int', ['slateblue','mediumslateblue','darkslateblue','darkblue']),
+            'border_int':_GEN_VAR('border_int', ['mediumslateblue','slateblue','darkslateblue','darkblue']),
             # ventricle (the 2 touching arcs in the center) thickness ranging between 1 to 4
             'vent_thick':_GEN_VAR('vent_thick', np.arange(1,4+1, dtype=int)),
             # 'vent_curv' (TODO) curvature of the ventricles ranging between ..
@@ -119,8 +122,8 @@ class ShapesData:
                                               np.arange(3,12, dtype=int)), 
                 # color of the regular polygon from shades of green to shades of red
                 f'{shape_pos}_int': _GEN_VAR(f'{shape_pos}_int', 
-                                            ['lightpink','lightsalmon','peach',
-                                             'rose','lightseagreen','lightgreen']),  #TODO
+                                            ['indianred','salmon','lightsalmon',
+                                             'palegoldenrod','lightgreen','darkgreen']), 
                 # the radius of the circle inside which the regular polygon is drawn
                 f'{shape_pos}_vol-rad': _GEN_VAR(f'{shape_pos}_volrad', 
                                             np.arange(2,5+1, dtype=int)),  
@@ -129,32 +132,44 @@ class ShapesData:
         
         # define all the covariates
         self.COVARS = {
-            'sex' : ['Male', 'Female'],
-            'site': ['siteA', 'siteB', 'siteC', 'siteD'],
-            'age' : np.arange(20,80+1),
+            'cov_sex' : ['Male', 'Female'],
+            'cov_site': ['siteA', 'siteB', 'siteC', 'siteD'],
+            'cov_age' : np.arange(20,50+1),
         }
         
         # define all labels
-        self.COVARS = {
-            'lbl-bin-shape'      : [True, False]
-            'lbl-bin-shape-bvol' : [True, False]
-            'lbl-bin-shape-vent' : [True, False]
-            'lbl-bin-bvol-vent'  : [True, False]
+        self.LABELS = {
+            'lblbin_stop-smidl'        : [True, False],
+            'lblbin_stop-smidl-bvol'   : [True, False],
+            'lblbin_stop-smidl-vthick' : [True, False],
+            'lblbin_bvol-vthick'       : [True, False],
+        }
+        
+        self.LBL_TO_GEN_MAP = {
+            # color tends towards red, curv to lower, volume to lower
+            '-stop':  [('shape-top_curv', (1,2,3)), ('shape-top_int', (1,2)), ('shape-top_vol-rad' ,(1,2))],
+            '-smidl': [('shape-midl_curv',(1,2,3)), ('shape-midl_int',(1,2)), ('shape-midl_vol-rad',(1,2))],
+            '-smidr': [('shape-midr_curv',(1,2,3)), ('shape-midr_int',(1,2)), ('shape-midr_vol-rad',(1,2))],
+            '-sbotr': [('shape-botr_curv',(1,2,3)), ('shape-botr_int',(1,2)), ('shape-botr_vol-rad',(1,2))],
+            '-sbotl': [('shape-botl_curv',(1,2,3)), ('shape-botl_int',(1,2)), ('shape-botl_vol-rad',(1,2))],
+            # brain volume reduces
+            '-bvol' : [('brain_vol-radminor',1), ('brain_vol-radminor',1)],
+            # ventricle thickness increases
+            '-vthick' : [('vent_thick',1)],
         }
     
     def generate_dataset(self, n_samples):
-        
         """Creates toy dataset and save to disk."""
         # Initialize a dataframe to store all data
         self.df =  pd.DataFrame()
         self.df.index.name = "subjectID"   
-        for name,_ in self.GENVARS.items():
+        for name,_ in self.GENVARS.items(): # TODO remove
             if '-rad' in name:
                 self.df['_gen_' + name] = np.nan
             else:
                 self.df['gen_' + name] = np.nan
         for name,_ in self.COVARS.items():
-            self.df['cov_' + name] = np.nan
+            self.df[name] = np.nan
             
         if self.debug:
             print(f"Generative parameter {' '*7}|{' '*7} States \n{'-'*60}")
@@ -170,10 +185,11 @@ class ShapesData:
             # reset the distribution of the generative properties of the image generations
             [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
                 
-            # (1) sample the convariates / confounders for the data point
+            # (1) sample the convariates / confounders for this data point
             covars = {covar: np.random.choice(vals).item() for covar, vals in self.COVARS.items()}
+            
             # if male increase the changes of sampling a higher brain volume by 2
-            if covars['sex']=='Male':
+            if covars['cov_sex']=='Male':
                 for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
                     self.GENVARS[var].bump_up_weight(-1, amt=3)
                     self.GENVARS[var].bump_up_weight(-2, amt=2) 
@@ -183,38 +199,42 @@ class ShapesData:
                     self.GENVARS[var].bump_up_weight(0, amt=3)
                     self.GENVARS[var].bump_up_weight(1, amt=2) 
             
-            if covars['site']=='siteA':
+            if covars['cov_site']=='siteA':
                 self.GENVARS['brain_int'].bump_up_weight(0, amt=4) 
                 self.GENVARS['border_int'].bump_up_weight(0, amt=2)
-            elif covars['site']=='siteB':
-                self.GENVARS['brain_int'].bump_up_weight(1, amt=3)
-                self.GENVARS['brain_int'].bump_up_weight(2, amt=2)
+            elif covars['cov_site']=='siteB':
+                self.GENVARS['brain_int'].bump_up_weight((1,2), amt=3)
                 self.GENVARS['border_int'].bump_up_weight(1, amt=2)
-            elif covars['site']=='siteC':
-                self.GENVARS['brain_int'].bump_up_weight(2, amt=2)
-                self.GENVARS['brain_int'].bump_up_weight(3, amt=4) 
+            elif covars['cov_site']=='siteC':
+                self.GENVARS['brain_int'].bump_up_weight((2,3), amt=3)
                 self.GENVARS['border_int'].bump_up_weight(2, amt=2)
             else:# covars['site']=='siteD':
                 self.GENVARS['brain_int'].bump_up_weight(4, amt=4) 
                 self.GENVARS['border_int'].bump_up_weight(1, amt=2)
             
-            if 20<=covars['age']<=40:
+            if 20<=covars['cov_age']<=30:
                 for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight(-1, amt=3)
-                    self.GENVARS[var].bump_up_weight(-2, amt=3) 
+                    self.GENVARS[var].bump_up_weight((-1,-2), amt=3)
                 self.GENVARS['vent_thick'].bump_up_weight(3, amt=3)
-            elif 40<covars['age']<=60:
+            elif 30<covars['cov_age']<=40:
                 for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight(-3, amt=3)
-                    self.GENVARS[var].bump_up_weight(-4, amt=3) 
+                    self.GENVARS[var].bump_up_weight((-3,-4), amt=3)
                 self.GENVARS['vent_thick'].bump_up_weight(2, amt=3)
-            else:# 60<=covars['age']<=80:
+            else:# 40<=covars['age']<=50:
                 for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight(0, amt=3)
-                    self.GENVARS[var].bump_up_weight(1, amt=3) 
+                    self.GENVARS[var].bump_up_weight((0,1), amt=3)
                 self.GENVARS['vent_thick'].bump_up_weight(1, amt=3)
-                
-            # TODO plot the dists instead
+            
+            # (2) sample the labels for this data point
+            labels = {lbl: np.random.choice(vals).item() for lbl, vals in self.LABELS.items()}
+            for lbl_name, lbl_val in labels.items():
+                if lbl_val == True:
+                    for tag, features in self.LBL_TO_GEN_MAP.items():
+                        if tag in lbl_name:
+                            for feature,idx in features:
+                                self.GENVARS[feature].bump_up_weight(idx, amt=3)
+            
+            # TODO show the dists as pdf plots 
             # if self.debug:
                 # print(f"Distributions for subject={subID} after covariates \n{'-'*60}")
                 # for name, var in self.GENVARS.items():
@@ -271,9 +291,11 @@ class ShapesData:
                                      fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
                                      outline=self.get_color_val(genvars['border_int']))
             
-            # store the covariates with a prefix 'cov_'
+            # store the sampled covariates and labels  
             for k,v in covars.items():
-                self.df.at[f'{subID:05}', 'cov_'+k] = v
+                self.df.at[f'{subID:05}', k] = v
+            for k,v in labels.items():
+                self.df.at[f'{subID:05}', k] = v
             # combine the gen params 'brain_vol-radmajor' and 'brain_vol-radminor' into one 'brain_vol'
             genvars.update({'brain_vol': math.pi*genvars['brain_vol-radmajor']*genvars['brain_vol-radminor'] })
             # calculate the the volume of all regular_polygon shapes
