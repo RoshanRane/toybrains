@@ -68,14 +68,14 @@ class _GEN_VAR:
         self.weights = np.ones(self.k)
     
     
-class ShapesData:
+class ToyBrainsData:
     
     def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False):
         
         self.I = img_size
         self.OUT_DIR = out_dir
         self.IMGS_DIR = f'{self.OUT_DIR}/images/'
-        self.LBLS_DIR = f'{self.OUT_DIR}/label/'
+        self.LBLS_DIR = f'{self.OUT_DIR}/masks/'
         shutil.rmtree(self.OUT_DIR, ignore_errors=True)
         os.makedirs(self.OUT_DIR, exist_ok=True)
         os.makedirs(self.IMGS_DIR, exist_ok=True)
@@ -101,7 +101,7 @@ class ShapesData:
             # 3. the intensity or brightness of the brain region ranging between 'greyness1' (210) to 'greyness5' (170)
             'brain_int':_GEN_VAR('brain_int', [210,200,190,180,170]), 
             # 4. the intensity or brightness of the ventricles and brain borders ranging between 'blueness1' to 'blueness3' 
-            'border_int':_GEN_VAR('border_int', ['mediumslateblue','slateblue','darkslateblue','darkblue']),
+            'border_int':_GEN_VAR('border_int', ['0-mediumslateblue','1-slateblue','2-darkslateblue','3-darkblue']),
             # ventricle (the 2 touching arcs in the center) thickness ranging between 1 to 4
             'vent_thick':_GEN_VAR('vent_thick', np.arange(1,4+1, dtype=int)),
             # 'vent_curv' (TODO) curvature of the ventricles ranging between ..
@@ -122,8 +122,8 @@ class ShapesData:
                                               np.arange(3,12, dtype=int)), 
                 # color of the regular polygon from shades of green to shades of red
                 f'{shape_pos}_int': _GEN_VAR(f'{shape_pos}_int', 
-                                            ['indianred','salmon','lightsalmon',
-                                             'palegoldenrod','lightgreen','darkgreen']), 
+                                            ['0-indianred','1-salmon','2-lightsalmon',
+                                             '3-palegoldenrod','4-lightgreen','5-darkgreen']), 
                 # the radius of the circle inside which the regular polygon is drawn
                 f'{shape_pos}_vol-rad': _GEN_VAR(f'{shape_pos}_volrad', 
                                             np.arange(2,5+1, dtype=int)),  
@@ -327,6 +327,8 @@ class ShapesData:
         
     def get_color_val(self, color):
         if isinstance(color, str):
+            # if there is a number tag on the color then remove it
+            if '-' in color: color = color.split('-')[-1]
             val = [int(c) for c in ColorDict()[color]]
         else:
             val = [int(color) for i in range(3)]
@@ -399,6 +401,6 @@ if __name__ == "__main__":
     IMG_SIZE = 64 # 64 pixels x 64 pixels
     RANDOM_SEED = 42 if args.debug else None
     # create the output folder
-    dataset = ShapesData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED)   
+    dataset = ToyBrainsData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED)   
     # create the shapes dataset
     dataset.generate_dataset(n_samples=args.n_samples)

@@ -3,3 +3,4 @@
 **/images/*.jpg
 **/labels/*.jpg
 **/toybrains_n*.csv
+**/*.cpython-38..pyc
