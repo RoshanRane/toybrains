@@ -157,8 +157,29 @@ class ToyBrainsData:
             # ventricle thickness increases
             '-vthick' : [('vent_thick',1)],
         }
+#         # create label by booling functions
+#         y = np.zeros((n_sample, 15))
+#         y[:, 0] = ((1 - concept[:, 0] * concept[:, 2]) + concept[:, 3]) > 0
+#         y[:, 1] = concept[:, 1] + (concept[:, 2] * concept[:, 3])
+#         y[:, 2] = (concept[:, 3] * concept[:, 4]) + (concept[:, 1] * concept[:, 2])
+#         y[:, 3] = np.bitwise_xor(concept[:, 0], concept[:, 1])
+#         y[:, 4] = concept[:, 1] + concept[:, 4]
+#         y[:, 5] = (1 - (concept[:, 0] + concept[:, 3] + concept[:, 4])) > 0
+#         y[:, 6] = np.bitwise_xor(concept[:, 1] * concept[:, 2], concept[:, 4])
+#         y[:, 7] = concept[:, 0] * concept[:, 4] + concept[:, 1]
+#         y[:, 8] = concept[:, 2]
+#         y[:, 9] = np.bitwise_xor(concept[:, 0] + concept[:, 1], concept[:, 3])
+#         y[:, 10] = (1 - (concept[:, 2] + concept[:, 4])) > 0
+#         y[:, 11] = concept[:, 0] + concept[:, 3] + concept[:, 4]
+#         y[:, 12] = np.bitwise_xor(concept[:, 1], concept[:, 2])
+#         y[:, 13] = (1 - (concept[:, 0] * concept[:, 4] + concept[:, 3])) > 0
+#         y[:, 14] = np.bitwise_xor(concept[:, 4], concept[:, 3])
+
+        # x = np.zeros((n_sample, width, height, 3))
+    
     
     def generate_dataset(self, n_samples):
+        
         """Creates toy dataset and save to disk."""
         # Initialize a dataframe to store all data
         self.df =  pd.DataFrame()
@@ -343,51 +364,6 @@ class ToyBrainsData:
         area = 0.5 * n * side_length * r
         return area
 
-    
-        
-#         # define the possible ranges for each generative property
-#         total_shape_range = ['o']
-#         total_thick_range =
-#         total_color_range =
-#         total_vol_range   =
-#         total_vol_range = ()
-        
-#         # positions can range between 0-15 in both X and Y axis
-#         positions = [()]
-#         shapes = ['1','*','<','h','x','3','s','p','_','d','D','v','o','.','+']
-#         color_array = ['green', 'red', 'blue', 'black', 'orange', 'purple', 'yellow']
-#         shape_props = {
-#                     '1':dict(ms=20, mew=1), '*':dict(ms=15, mew=1), '<':dict(ms=13, mew=2),
-#                     'h':dict(ms=15, mew=2), 'x':dict(ms=13, mew=2), '3':dict(ms=20, mew=2),
-#                     's':dict(ms=15, mew=2), 'p':dict(ms=15, mew=2), '_':dict(ms=20, mew=2),
-#                     'd':dict(ms=12, mew=2), 'D':dict(ms=12, mew=2), 'v':dict(ms=20, mew=2), 
-#                     'o':dict(ms=20, mew=2), '.':dict(ms=20, mew=2), '+':dict(ms=20, mew=2)}
-
-#         # randomly sample if which concepts would exist in each sample
-#         concept = np.reshape(
-#                         np.random.randint(2, size=15*n_sample), 
-#                         (-1, 15)).astype(np.bool_)
-#         # print(concept.shape)
-
-#         # create label by booling functions
-#         y = np.zeros((n_sample, 15))
-#         y[:, 0] = ((1 - concept[:, 0] * concept[:, 2]) + concept[:, 3]) > 0
-#         y[:, 1] = concept[:, 1] + (concept[:, 2] * concept[:, 3])
-#         y[:, 2] = (concept[:, 3] * concept[:, 4]) + (concept[:, 1] * concept[:, 2])
-#         y[:, 3] = np.bitwise_xor(concept[:, 0], concept[:, 1])
-#         y[:, 4] = concept[:, 1] + concept[:, 4]
-#         y[:, 5] = (1 - (concept[:, 0] + concept[:, 3] + concept[:, 4])) > 0
-#         y[:, 6] = np.bitwise_xor(concept[:, 1] * concept[:, 2], concept[:, 4])
-#         y[:, 7] = concept[:, 0] * concept[:, 4] + concept[:, 1]
-#         y[:, 8] = concept[:, 2]
-#         y[:, 9] = np.bitwise_xor(concept[:, 0] + concept[:, 1], concept[:, 3])
-#         y[:, 10] = (1 - (concept[:, 2] + concept[:, 4])) > 0
-#         y[:, 11] = concept[:, 0] + concept[:, 3] + concept[:, 4]
-#         y[:, 12] = np.bitwise_xor(concept[:, 1], concept[:, 2])
-#         y[:, 13] = (1 - (concept[:, 0] * concept[:, 4] + concept[:, 3])) > 0
-#         y[:, 14] = np.bitwise_xor(concept[:, 4], concept[:, 3])
-
-        # x = np.zeros((n_sample, width, height, 3))
 
 if __name__ == "__main__":
 
