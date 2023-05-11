@@ -80,6 +80,7 @@ def plot_col_dists(df, title=''):
         # print('[D]',col, plottypes[col])
         if i >= subplot_ncols*(len(cols)//subplot_ncols) + subplot_overflows:
             ax.axis('off')
+            
         elif plottype == 'bar':
             # check if the attribute represents colors then use the same color names for the bar plot
             if isinstance(df_copy.loc[0,col], str) and is_color_like(df_copy.loc[0,col].split('-')[-1]):
@@ -95,8 +96,10 @@ def plot_col_dists(df, title=''):
                 ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: int(x)))
             elif isinstance(df_copy.loc[0,col], str):
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+                
         elif plottype == 'hist':
-            sns.histplot(data=df_copy, x=col, ax=ax)
+            bins = 10 if df_copy[col].nunique()>10 else df_copy[col].nunique()
+            sns.histplot(data=df_copy, x=col, bins=, ax=ax)
         elif plottype == 'pie':
             cnt = df_copy[col].value_counts().sort_index()
             ax.pie(cnt, labels=cnt.index,

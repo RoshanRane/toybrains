@@ -11,6 +11,7 @@ import math
 
 import os
 import shutil
+from joblib import Parallel, delayed  
 from tqdm import tqdm
 import argparse
 
@@ -70,12 +71,13 @@ class _GEN_VAR:
     
 class ToyBrainsData:
     
-    def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False):
+    def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False, njobs=1):
         
         self.I = img_size
         self.OUT_DIR = out_dir
         self.IMGS_DIR = f'{self.OUT_DIR}/images/'
         self.LBLS_DIR = f'{self.OUT_DIR}/masks/'
+        self.njobs = njobs
         shutil.rmtree(self.OUT_DIR, ignore_errors=True)
         os.makedirs(self.OUT_DIR, exist_ok=True)
         os.makedirs(self.IMGS_DIR, exist_ok=True)
@@ -202,6 +204,9 @@ class ToyBrainsData:
 
         for subID in tqdm(range(n_samples)):
             
+            ## TODO parallize data gen
+            # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
+            
             genvars = {}
             # reset the distribution of the generative properties of the image generations
             [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
@@ -276,11 +281,12 @@ class ToyBrainsData:
                      self.ctr[1]-genvars['brain_vol-radmajor'])
             x1,y1 = (self.ctr[0]+genvars['brain_vol-radminor']-1,
                      self.ctr[1]+genvars['brain_vol-radmajor']-1)
-                
+
             draw.ellipse((x0,y0,x1,y1), 
                          fill=self.get_color_val(genvars['brain_int']), 
-                         width=genvars['brain_thick'], 
-                         outline=self.get_color_val(genvars['brain_int']))
+                         width=genvars['brain_thick'],
+                         outline=self.get_color_val(genvars['border_int'])
+                        )
             # save the brain mask
             brain_mask = (np.array(image).sum(axis=-1) > 0) #TODO save it
 
@@ -325,6 +331,7 @@ class ToyBrainsData:
                     f'{shape_pos}_vol': 
                     self.area_of_regular_polygon(
                         n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
+                
             # store the generative properties with a prefix 'gen_'
             for k,v in genvars.items():
                 if '-rad' in k: # radius is stored as the secondary gen variable 
