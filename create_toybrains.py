@@ -111,8 +111,8 @@ class ToyBrainsData:
         self.SHAPE_POS = {'shape-top': (self.I*.5, self.I*.22),
                           'shape-midr':(self.I*.7, self.I*.4),
                           'shape-midl':(self.I*.3, self.I*.4),
-                          'shape-botr':(self.I*.4, self.I*.7),
-                          'shape-botl':(self.I*.6, self.I*.7)}
+                          'shape-botr':(self.I*.6, self.I*.7),
+                          'shape-botl':(self.I*.4, self.I*.7)}
                                           
         for shape_pos in self.SHAPE_POS.keys():
             
