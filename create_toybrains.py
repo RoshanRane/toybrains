@@ -69,6 +69,7 @@ class _GEN_VAR:
         self.weights = np.ones(self.k)
     
     
+    
 class ToyBrainsData:
     
     def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False, njobs=1):
@@ -90,7 +91,13 @@ class ToyBrainsData:
         # the center of the image for drawing reference
         self.ctr = (self.I/2, self.I/2) #np.random.randint(self.I/2-2,self.I/2+2, size=2)
         
-        # define all the generative properties for the images
+        # initialize all the generative properties for the images and the labels and covariates
+        self._setup_genvars_covars()
+        
+        
+    def _setup_genvars_covars(self):
+    
+        # (1) define all the generative properties for the images
         self.GENVARS = {
             # 1. brain_vol created as a ellipse with a minor and major radius
             # ranging between 1633 to 2261 [(S/2-12)*(S/2-6) to (S/2-8)*(S/2-2)]
@@ -132,14 +139,35 @@ class ToyBrainsData:
                 # TODO # rot = np.random.randint(0,360)
             })
         
-        # define all the covariates
+        # (2) define all the covariates
         self.COVARS = {
             'cov_sex' : ['Male', 'Female'],
             'cov_site': ['siteA', 'siteB', 'siteC', 'siteD'],
-            'cov_age' : np.arange(20,50+1),
+            # TODO
+            # 'cov_sex' : _GEN_VAR(name='cov_sex', states=['Male', 'Female']),
+            # 'cov_site' : _GEN_VAR(name='sex',    states=['siteA', 'siteB', 'siteC', 'siteD']),
+            'cov_age' : np.arange(20, 50+1),
+        }
+        # Rules about which covariate-state influences which generative variables
+        self.RULES_COV_TO_GEN = {
+            ## `sex -> brain_vol` 
+            # if male increase the changes of sampling a higher brain volume
+            ('cov_sex',  'Male'): {'brain_vol-radminor': dict(idxs=(-1,-2),amt=1), 
+                                   'brain_vol-radminor': dict(idxs=(-1,-2),amt=1)},
+            ('cov_sex','Female'): {'brain_vol-radminor': dict(idxs=(0,1,2),amt=1), 
+                                   'brain_vol-radminor': dict(idxs=(0,1,2),amt=1)},
+            ## `site -> brain_int & border_int` 
+            ('cov_site','siteA'): {'brain_int' : dict(idxs=0,amt=4),
+                                   'border_int': dict(idxs=0,amt=1)},
+            ('cov_site','siteB'): {'brain_int' : dict(idxs=1,amt=4),
+                                   'border_int': dict(idxs=1,amt=1)},
+            ('cov_site','siteC'): {'brain_int' : dict(idxs=2,amt=4),
+                                   'border_int': dict(idxs=2,amt=1)},
+            ('cov_site','siteD'): {'brain_int' : dict(idxs=3,amt=4),
+                                   'border_int': dict(idxs=3,amt=1)},
         }
         
-        # define all labels
+        # (3) define all labels
         self.LABELS = {
             'lblbin_stop-smidl'        : [True, False],
             'lblbin_stop-smidl-bvol'   : [True, False],
@@ -147,41 +175,76 @@ class ToyBrainsData:
             'lblbin_bvol-vthick'       : [True, False],
         }
         
-        self.LBL_TO_GEN_MAP = {
+        # Rules to define the relationship between the tags in lbl name and image attributes
+        self.RULES_LBL_TO_GEN = {
             # color tends towards red, curv to lower, volume to lower
-            '-stop':  [('shape-top_curv', (1,2,3)), ('shape-top_int', (1,2)), ('shape-top_vol-rad' ,(1,2))],
-            '-smidl': [('shape-midl_curv',(1,2,3)), ('shape-midl_int',(1,2)), ('shape-midl_vol-rad',(1,2))],
-            '-smidr': [('shape-midr_curv',(1,2,3)), ('shape-midr_int',(1,2)), ('shape-midr_vol-rad',(1,2))],
-            '-sbotr': [('shape-botr_curv',(1,2,3)), ('shape-botr_int',(1,2)), ('shape-botr_vol-rad',(1,2))],
-            '-sbotl': [('shape-botl_curv',(1,2,3)), ('shape-botl_int',(1,2)), ('shape-botl_vol-rad',(1,2))],
+            '-stop':  {'shape-top_curv'    :dict(idxs=(1,2,3),amt=3), 
+                       'shape-top_int'     :dict(idxs=(1,2),amt=3), 
+                       'shape-top_vol-rad' :dict(idxs=(1,2),amt=3)},
+            '-smidl': {'shape-midl_curv'   :dict(idxs=(1,2,3),amt=3), 
+                       'shape-midl_int'    :dict(idxs=(1,2),amt=3), 
+                       'shape-midl_vol-rad':dict(idxs=(1,2),amt=3)},
+            '-smidr': {'shape-midr_curv'   :dict(idxs=(1,2,3),amt=3), 
+                       'shape-midr_int'    :dict(idxs=(1,2),amt=3), 
+                       'shape-midr_vol-rad':dict(idxs=(1,2),amt=3)},
+            '-sbotr': {'shape-botr_curv'   :dict(idxs=(1,2,3),amt=3), 
+                       'shape-botr_int'    :dict(idxs=(1,2),amt=3), 
+                       'shape-botr_vol-rad':dict(idxs=(1,2),amt=3)},
+            '-sbotl': {'shape-botl_curv'   :dict(idxs=(1,2,3),amt=3), 
+                       'shape-botl_int'    :dict(idxs=(1,2),amt=3), 
+                       'shape-botl_vol-rad':dict(idxs=(1,2),amt=3)},
             # brain volume reduces
-            '-bvol' : [('brain_vol-radminor',1), ('brain_vol-radminor',1)],
+            '-bvol' : {'brain_vol-radminor':dict(idxs=1, amt=3),
+                       'brain_vol-radminor':dict(idxs=1, amt=3)},
             # ventricle thickness increases
-            '-vthick' : [('vent_thick',1)],
+            '-vthick' : {'vent_thick':dict(idxs=1, amt=3)},
         }
-#         # create label by booling functions
-#         y = np.zeros((n_sample, 15))
-#         y[:, 0] = ((1 - concept[:, 0] * concept[:, 2]) + concept[:, 3]) > 0
-#         y[:, 1] = concept[:, 1] + (concept[:, 2] * concept[:, 3])
-#         y[:, 2] = (concept[:, 3] * concept[:, 4]) + (concept[:, 1] * concept[:, 2])
-#         y[:, 3] = np.bitwise_xor(concept[:, 0], concept[:, 1])
-#         y[:, 4] = concept[:, 1] + concept[:, 4]
-#         y[:, 5] = (1 - (concept[:, 0] + concept[:, 3] + concept[:, 4])) > 0
-#         y[:, 6] = np.bitwise_xor(concept[:, 1] * concept[:, 2], concept[:, 4])
-#         y[:, 7] = concept[:, 0] * concept[:, 4] + concept[:, 1]
-#         y[:, 8] = concept[:, 2]
-#         y[:, 9] = np.bitwise_xor(concept[:, 0] + concept[:, 1], concept[:, 3])
-#         y[:, 10] = (1 - (concept[:, 2] + concept[:, 4])) > 0
-#         y[:, 11] = concept[:, 0] + concept[:, 3] + concept[:, 4]
-#         y[:, 12] = np.bitwise_xor(concept[:, 1], concept[:, 2])
-#         y[:, 13] = (1 - (concept[:, 0] * concept[:, 4] + concept[:, 3])) > 0
-#         y[:, 14] = np.bitwise_xor(concept[:, 4], concept[:, 3])
-
-        # x = np.zeros((n_sample, width, height, 3))
-    
-    
-    def generate_dataset(self, n_samples):
         
+       
+    
+    def _adjust_genvar_dists(self, covars, rules):
+        """Configure the relationship between covariates and the generative attributes"""
+        ### model `Covariates -> image attributes` distribution
+        for (cov, cov_state), attrs in rules.items():
+            if cov in covars.keys() and covars[cov]==cov_state:
+                for attr, dist_kwargs in attrs.items():
+                    self.GENVARS[attr].bump_up_weight(**dist_kwargs)
+        
+        ## `age -> brain_vol & vent_thick`  # TODO
+        # if 20<=covars['cov_age']<=30:
+        #     for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
+        #         self.GENVARS[var].bump_up_weight((-1,-2), amt=3)
+        #     self.GENVARS['vent_thick'].bump_up_weight(3, amt=3)
+        # elif 30<covars['cov_age']<=40:
+        #     for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
+        #         self.GENVARS[var].bump_up_weight((-3,-4), amt=3)
+        #     self.GENVARS['vent_thick'].bump_up_weight(2, amt=3)
+        # else:# 40<=covars['age']<=50:
+        #     for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
+        #         self.GENVARS[var].bump_up_weight((0,1), amt=3)
+        #     self.GENVARS['vent_thick'].bump_up_weight(1, amt=3)
+    
+    def _adjust_genvar_lbl_dists(self, labels, rules):
+        """Configure the relationship between covariates and the generative attributes"""
+        ### model `labels -> image attributes`
+        # for each lbl, look at the tags in the label name 
+        for lbl_name, lbl_val in labels.items():
+            if lbl_val == True:
+            # and set the related image attr as defined in self.RULES_LBL_TO_GEN
+                for tag, features in rules.items():
+                    if tag in lbl_name:
+                        for feature, kwargs in features.items():
+                            self.GENVARS[feature].bump_up_weight(**kwargs)
+        
+    
+    def show_data_gen_dists(self):
+        pass #TODO
+    
+    def reset_genvars(self):
+        [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
+        
+        
+    def generate_dataset(self, n_samples):
         """Creates toy dataset and save to disk."""
         # Initialize a dataframe to store all data
         self.df =  pd.DataFrame()
@@ -199,84 +262,34 @@ class ToyBrainsData:
             for name, var in self.GENVARS.items():
                 print(f"{name} {' '*(25-len(name))} {var.states}")
             
-            
-        print("Generating {} synthetic 'toy brain' images:".format(n_samples))
+        print("Generating {} synthetic toy brain images:".format(n_samples))
 
+        ## TODO parallize data gen
+        # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
         for subID in tqdm(range(n_samples)):
             
-            ## TODO parallize data gen
-            # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
-            
-            genvars = {}
-            # reset the distribution of the generative properties of the image generations
-            [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
-                
-            # (1) sample the convariates / confounders for this data point
+            # first reset all generative image attributes to have uniform distribution
+            self.reset_genvars()
+            # (1) sample the covariates / confounders for this data point and influence the image generation dists
             covars = {covar: np.random.choice(vals).item() for covar, vals in self.COVARS.items()}
-            
-            # if male increase the changes of sampling a higher brain volume by 2
-            if covars['cov_sex']=='Male':
-                for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight(-1, amt=3)
-                    self.GENVARS[var].bump_up_weight(-2, amt=2) 
-            # if female increase the changes of sampling a lower brain volume by 2
-            else:
-                for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight(0, amt=3)
-                    self.GENVARS[var].bump_up_weight(1, amt=2) 
-            
-            if covars['cov_site']=='siteA':
-                self.GENVARS['brain_int'].bump_up_weight(0, amt=4) 
-                self.GENVARS['border_int'].bump_up_weight(0, amt=2)
-            elif covars['cov_site']=='siteB':
-                self.GENVARS['brain_int'].bump_up_weight((1,2), amt=3)
-                self.GENVARS['border_int'].bump_up_weight(1, amt=2)
-            elif covars['cov_site']=='siteC':
-                self.GENVARS['brain_int'].bump_up_weight((2,3), amt=3)
-                self.GENVARS['border_int'].bump_up_weight(2, amt=2)
-            else:# covars['site']=='siteD':
-                self.GENVARS['brain_int'].bump_up_weight(4, amt=4) 
-                self.GENVARS['border_int'].bump_up_weight(1, amt=2)
-            
-            if 20<=covars['cov_age']<=30:
-                for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight((-1,-2), amt=3)
-                self.GENVARS['vent_thick'].bump_up_weight(3, amt=3)
-            elif 30<covars['cov_age']<=40:
-                for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight((-3,-4), amt=3)
-                self.GENVARS['vent_thick'].bump_up_weight(2, amt=3)
-            else:# 40<=covars['age']<=50:
-                for var in ['brain_vol-radmajor', 'brain_vol-radminor']:
-                    self.GENVARS[var].bump_up_weight((0,1), amt=3)
-                self.GENVARS['vent_thick'].bump_up_weight(1, amt=3)
-            
+            self._adjust_genvar_dists(covars, self.RULES_COV_TO_GEN)
             # (2) sample the labels for this data point
             labels = {lbl: np.random.choice(vals).item() for lbl, vals in self.LABELS.items()}
-            for lbl_name, lbl_val in labels.items():
-                if lbl_val == True:
-                    for tag, features in self.LBL_TO_GEN_MAP.items():
-                        if tag in lbl_name:
-                            for feature,idx in features:
-                                self.GENVARS[feature].bump_up_weight(idx, amt=3)
+            self._adjust_genvar_lbl_dists(labels, self.RULES_LBL_TO_GEN)
             
-            # TODO show the dists as pdf plots 
-            # if self.debug:
-                # print(f"Distributions for subject={subID} after covariates \n{'-'*60}")
-                # for name, var in self.GENVARS.items():
-                #     print(f"{name} {' '*(25-len(name))} {var.weights*100/var.weights.sum()}")
-                
+                           
             # Create a new image of size 64x64 with a black background and a draw object on it
             image = Image.new('RGB',(self.I,self.I),(0,0,0))
             draw = ImageDraw.Draw(image)
 
-            # (2) Draw the whole brain 
-            # sample and save the whole brain generative properties
+            # (3) sample the image attributes conditional on the sampled labels and covariates 
+            genvars = {}
             for gen_var_name, gen_var in self.GENVARS.items():
                 if ('brain_' in gen_var_name) or (gen_var_name=='border_int'):
                     genvars.update({gen_var_name: gen_var.sample()})
-
-            # (2a) Draw an outer ellipse
+            
+            # (4) Draw the brain 
+            # (4a) Draw an outer ellipse of the image
             x0,y0 = (self.ctr[0]-genvars['brain_vol-radminor'],
                      self.ctr[1]-genvars['brain_vol-radmajor'])
             x1,y1 = (self.ctr[0]+genvars['brain_vol-radminor']-1,
@@ -290,7 +303,7 @@ class ToyBrainsData:
             # save the brain mask
             brain_mask = (np.array(image).sum(axis=-1) > 0) #TODO save it
 
-            # (2b) Draw ventricles as 2 touching arcs 
+            # (4b) Draw ventricles as 2 touching arcs 
             for gen_var_name, gen_var in self.GENVARS.items():
                 if ('vent_' in gen_var_name):
                     genvars.update({gen_var_name: gen_var.sample()})
@@ -304,7 +317,7 @@ class ToyBrainsData:
                      fill=self.get_color_val(genvars['border_int']), 
                      width=genvars['vent_thick'])
 
-            # (3) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
+            # (4c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
             # with different size, color and rotations
             for shape_pos, (x,y) in self.SHAPE_POS.items():
                 
@@ -317,8 +330,10 @@ class ToyBrainsData:
                                      rotation=np.random.randint(0,360),
                                      fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
                                      outline=self.get_color_val(genvars['border_int']))
+            # (4d) save the image
+            image.save(f"{self.IMGS_DIR}{subID:05}.jpg")
             
-            # store the sampled covariates and labels  
+            # (5) store the sampled covariates and labels  
             for k,v in covars.items():
                 self.df.at[f'{subID:05}', k] = v
             for k,v in labels.items():
@@ -344,13 +359,8 @@ class ToyBrainsData:
             if subID//1000 == 0:
                 self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")      
             
-            # Save the image
-            image.save(f"{self.IMGS_DIR}{subID:05}.jpg")
-            
-        
         # format the subject IDs same as the filename
         self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")
-        
         
         
     def get_color_val(self, color):
@@ -371,6 +381,10 @@ class ToyBrainsData:
         area = 0.5 * n * side_length * r
         return area
 
+    
+    
+    
+    
 
 if __name__ == "__main__":
 
