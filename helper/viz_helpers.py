@@ -99,8 +99,8 @@ def plot_col_counts(df, title=''):
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
                 
         elif plottype == 'hist':
-            bins = df_copy[col].nunique()//4# if df_copy[col].nunique()>10 else df_copy[col].nunique()
-            sns.histplot(data=df_copy, x=col, ax=ax, kde=True) #multiple='fill'
+            bins = df_copy[col].nunique()//5
+            sns.histplot(data=df_copy, x=col, ax=ax, kde=True, bins=bins) #multiple='fill'
         elif plottype == 'pie':
             cnt = df_copy[col].value_counts().sort_index()
             ax.pie(cnt, labels=cnt.index,
@@ -113,6 +113,7 @@ def plot_col_counts(df, title=''):
     
     
 def plot_col_dists(df, attr_cols, cov_cols, title=''):
+    
     df = df.copy()
     attr_cols = sorted(attr_cols)
     cov_cols = sorted(cov_cols)
@@ -133,10 +134,9 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
                           figsize=(2+2*subplot_ncols, 2*subplot_nrows),
-                          constrained_layout=True
+                          sharex='row', sharey='row', constrained_layout=True, 
                           )
     
-    legends = []
     for i, axis_row in enumerate(axes):
         for j, ax in enumerate(axis_row):
             attr, cov = attr_cols[i], cov_cols[j]
@@ -145,7 +145,6 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
                 sns.move_legend(g, "upper center", bbox_to_anchor=(0.5,1.5), 
                                 alignment='center', ncols=2,
                                 title_fontproperties={'size':fs}) #, 'weight':'heavy'
-            # g._legend.set_bbox_to_anchor((1.2,1.5))
             # set xlabel and ylabel at the top and leftside of the plots resp.
             ax.set_ylabel(attr, fontsize=fs) if j==0 else ax.set_ylabel(None)
             ax.set_xlabel(None)
@@ -153,6 +152,6 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
         
     if title: f.suptitle(title, fontsize=fs+4)
     f.supylabel("Density")
-    f.supylabel("Covariates = ")
+    f.supylabel("Covariates / labels")
     
     # plt.tight_layout()
