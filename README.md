@@ -8,8 +8,8 @@ The generated synthetic data can be used to quickly test and compare different c
 - The [How-to-use](docs/How-to-use.ipynb) notebook walks you through how one can create toybrain datasets and modify the relationship between the image generation attributes and any custom label or covariate.
 - The [viz_gen_data_dists](viz_data_dists.ipynb) notebook shows how to quickly see the distribution of the generated data and what are the effects of the labels and covariates on the generated images. `inprogress`
 
-## Image attributes that can be tuned:
+## Image attributes:
 ![Modifying different attributes of the image](docs/toybrains.png)
 
-
+## Covariates and labels:
 ![An example configuration of labels and image attributes](docs/toybrains_causal.png)
