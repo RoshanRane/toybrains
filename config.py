@@ -69,9 +69,9 @@ class PROB_VAR:
 
 # List of all covariates
 COVARS = {
-            'cov_sex' : PROB_VAR(name='cov_sex', states=['Male', 'Female']),
-            'cov_site': PROB_VAR(name='cov_site', states=['siteA', 'siteB', 'siteC', 'siteD']),
-            'cov_age' : PROB_VAR(name='cov_age', states=np.arange(20, 50+1)),
+            'cov_sex' :         PROB_VAR(name='cov_sex',            states=['Male', 'Female']),
+            'cov_site':         PROB_VAR(name='cov_site',           states=['siteA', 'siteB', 'siteC', 'siteD']),
+            'cov_age' :         PROB_VAR(name='cov_age',            states=np.arange(20, 50+1)),
             'lblbin_shp'      : PROB_VAR(name='lbl_bin_shp',        states=[True, False]),
             'lblbin_shp-vol'  : PROB_VAR(name='lbl_bin_shp-vol',    states=[True, False]),
             'lblbin_shp-vent' : PROB_VAR(name='lbl_bin_shp-vthick', states=[True, False]),
@@ -83,7 +83,7 @@ RULES_COV_TO_GEN = {
     'cov_sex':{
         'Male':{ # if male increase the changes of sampling a higher brain volume
             'brain_vol-radminor': dict(idxs=(-1,-2),amt=(5,3)), 
-            'brain_vol-radmajor': dict(idxs=(-1,-3),amt=(5,3))},
+            'brain_vol-radmajor': dict(idxs=(-1,-2),amt=(5,3))},
         'Female':{ 
             'brain_vol-radminor': dict(idxs=(0,1),amt=(5,3)), 
             'brain_vol-radmajor': dict(idxs=(0,1),amt=(5,3))}},
@@ -105,75 +105,76 @@ RULES_COV_TO_GEN = {
     'cov_age':{
         # DICT keys can be tuples
         tuple(range(20,30)):{ # younger subjects have higher brain volume and lower vent thickness 
-            'brain_vol-radminor': dict(idxs=(-1,-2),amt=3), 
-            'brain_vol-radmajor': dict(idxs=(-1,-2),amt=3),
-            'vent_thick'        : dict(idxs=(0,1), amt=3)},
+            'brain_vol-radminor': dict(idxs=(2,3), amt=(3,5)),
+            'brain_vol-radmajor': dict(idxs=(2,3), amt=(3,5)), 
+            'vent_thick'        : dict(idxs=(0,1), amt=(5,3))},
         tuple(range(30,40)):{ 
-            'brain_vol-radminor': dict(idxs=(1,2),amt=3), 
-            'brain_vol-radmajor': dict(idxs=(1,2),amt=3),
-            'vent_thick'        : dict(idxs=(1,2), amt=3)},
+            'brain_vol-radminor': dict(idxs=(1,2), amt=(5,5)), 
+            'brain_vol-radmajor': dict(idxs=(1,2), amt=(5,5)),
+            'vent_thick'        : dict(idxs=(1,2), amt=(5,5))},
         tuple(range(40,50+1)):{ 
-            'brain_vol-radminor': dict(idxs=(2,3),amt=3), 
-            'brain_vol-radmajor': dict(idxs=(2,3),amt=3),
-            'vent_thick'        : dict(idxs=(2,3), amt=3)},
+            'brain_vol-radminor': dict(idxs=(0,1), amt=(5,3)), 
+            'brain_vol-radmajor': dict(idxs=(0,1), amt=(5,3)),
+            'vent_thick'        : dict(idxs=(2,3), amt=(3,5))},
     },
     
     ## `lbl -> shape, vol, vent ....`
     'lblbin_shp':{
         True:{ # top and midl shape's colors tends towards red, curv to lower, volume to lower
             'shape-top_curv'    :dict(idxs=(1,2,3),amt=3), 
-            'shape-top_int'     :dict(idxs=(1,2),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(1,2),amt=3),
+            'shape-top_int'     :dict(idxs=(0,1),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(0,1),amt=(5,3)),
             'shape-midl_curv'   :dict(idxs=(1,2,3),amt=3), 
-            'shape-midl_int'    :dict(idxs=(1,2),amt=3), 
-            'shape-midl_vol-rad':dict(idxs=(1,2),amt=3),
-            'shape-midr_curv'   :dict(idxs=(1,2,3),amt=3)},
+            'shape-midl_int'    :dict(idxs=(0,1),amt=(5,3)), 
+            'shape-midl_vol-rad':dict(idxs=(0,1),amt=(5,3))},
         False:{ 
-            'shape-top_curv'    :dict(idxs=(-0,-1,-2),amt=3), 
-            'shape-top_int'     :dict(idxs=(-0,-1),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(-0,-1),amt=3),
-            'shape-midl_curv'   :dict(idxs=(-0,-1,-2),amt=3), 
-            'shape-midl_int'    :dict(idxs=(-0,-1),amt=3), 
-            'shape-midl_vol-rad':dict(idxs=(-0,-1),amt=3),
-            'shape-midr_curv'   :dict(idxs=(-0,-1,-2),amt=3)}},
+            'shape-top_curv'    :dict(idxs=(-1,-2,-3),amt=3), 
+            'shape-top_int'     :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(-1,-2),amt=(5,3)),
+            'shape-midl_curv'   :dict(idxs=(-1,-2,-3),amt=3), 
+            'shape-midl_int'    :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-midl_vol-rad':dict(idxs=(-1,-2),amt=(5,3))}},
         
     'lblbin_shp-vol':{
         True:{ # brain volume also reduces
+            'shape-top_curv'    :dict(idxs=(1,2,3),amt=3), 
+            'shape-top_int'     :dict(idxs=(0,1),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(0,1),amt=(5,3)),
+            'shape-midl_curv'   :dict(idxs=(1,2,3),amt=3),
+            'shape-midl_int'    :dict(idxs=(0,1),amt=(5,3)),
+            'shape-midl_vol-rad':dict(idxs=(0,1),amt=(5,3))},
+        
             'brain_vol-radminor':dict(idxs=(1,2,3), amt=3),
             'brain_vol-radmajor':dict(idxs=(1,2,3), amt=3),
-            'shape-top_curv'    :dict(idxs=(1,2,3),amt=3), 
-            'shape-top_int'     :dict(idxs=(1,2),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(1,2),amt=3),
-            'shape-midl_curv'   :dict(idxs=(1,2,3),amt=3),
-            'shape-midl_int'    :dict(idxs=(1,2),amt=3),
-            'shape-midl_vol-rad':dict(idxs=(1,2),amt=3)},
         False:{ 
-            'brain_vol-radminor':dict(idxs=(-1,-2,-3), amt=3),
-            'brain_vol-radmajor':dict(idxs=(-1,-2,-3), amt=3),
             'shape-top_curv'    :dict(idxs=(-1,-2,-3),amt=3), 
-            'shape-top_int'     :dict(idxs=(-1,-2),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(-1,-2),amt=3),
+            'shape-top_int'     :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(-1,-2),amt=(5,3)),
             'shape-midl_curv'   :dict(idxs=(-1,-2,-3),amt=3), 
-            'shape-midl_int'    :dict(idxs=(-1,-2),amt=3), 
-            'shape-midl_vol-rad':dict(idxs=(-1,-2),amt=3),
-            'shape-midr_curv'   :dict(idxs=(-1,-2,-3),amt=3)}},
+            'shape-midl_int'    :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-midl_vol-rad':dict(idxs=(-1,-2),amt=(5,3)),
+            
+            'brain_vol-radminor':dict(idxs=(-1,-2,-3), amt=3),
+            'brain_vol-radmajor':dict(idxs=(-1,-2,-3), amt=3)}},
         
     'lblbin_shp-vent':{
         True:{ # top and midl shape's colors tends towards red, curv to lower, volume to lower
-            'vent_thick'        :dict(idxs=(1,2), amt=3),
             'shape-top_curv'    :dict(idxs=(1,2,3),amt=3), 
-            'shape-top_int'     :dict(idxs=(1,2),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(1,2),amt=3),
+            'shape-top_int'     :dict(idxs=(0,1),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(0,1),amt=(5,3)),
             'shape-midl_curv'   :dict(idxs=(1,2,3),amt=3),
-            'shape-midl_int'    :dict(idxs=(1,2),amt=3),
-            'shape-midl_vol-rad':dict(idxs=(1,2),amt=3)},
+            'shape-midl_int'    :dict(idxs=(0,1),amt=(5,3)),
+            'shape-midl_vol-rad':dict(idxs=(0,1),amt=(5,3))},
+        
+            'vent_thick'        :dict(idxs=(0,1), amt=(5,3)),
         False:{ # ventricle thickness also increases
-            'vent_thick'        :dict(idxs=(-1,-2), amt=3),
             'shape-top_curv'    :dict(idxs=(-1,-2,-3),amt=3), 
-            'shape-top_int'     :dict(idxs=(-1,-2),amt=3), 
-            'shape-top_vol-rad' :dict(idxs=(-1,-2),amt=3),
+            'shape-top_int'     :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-top_vol-rad' :dict(idxs=(-1,-2),amt=(5,3)),
             'shape-midl_curv'   :dict(idxs=(-1,-2,-3),amt=3), 
-            'shape-midl_int'    :dict(idxs=(-1,-2),amt=3), 
-            'shape-midl_vol-rad':dict(idxs=(-1,-2),amt=3),
-            'shape-midr_curv'   :dict(idxs=(-1,-2,-3),amt=3)}}
+            'shape-midl_int'    :dict(idxs=(-1,-2),amt=(5,3)), 
+            'shape-midl_vol-rad':dict(idxs=(-1,-2),amt=(5,3)),
+            'shape-midr_curv'   :dict(idxs=(-1,-2,-3),amt=3),
+            
+            'vent_thick'        :dict(idxs=(-1,-2), amt=(5,3)) }}
 }

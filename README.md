@@ -10,3 +10,6 @@ The generated synthetic data can be used to quickly test and compare different c
 
 ## Image attributes that can be tuned:
 ![Modifying different attributes of the image](docs/toybrains.png)
+
+
+![An example configuration of labels and image attributes](docs/toybrains_causal.png)

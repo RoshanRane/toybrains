@@ -1,7 +1,10 @@
 .ipynb_checkpoints/
 *_checkpoint*
+toybrains/
 **/images/*.jpg
 **/labels/*.jpg
 **/toybrains_n*.csv
 **/*.cpython-*.pyc 
 *.cpython-*.pyc
+nohup.out
+**/nohup*.out
