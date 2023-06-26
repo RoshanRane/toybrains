@@ -14,16 +14,14 @@ from copy import copy, deepcopy
 import itertools
 from tqdm import tqdm
 import argparse
-from config import PROB_VAR, COVARS, RULES_COV_TO_GEN
-
+from config import PROB_VAR, COVARS, RULES_COV_TO_GEN, loop_update_rules
+import importlib
 
 from helper.viz_helpers import plot_col_dists
 
-
-
 class ToyBrainsData:
     
-    def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False, njobs=1):
+    def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False, njobs=1, config=None):
         
         self.I = img_size
         self.OUT_DIR = out_dir
@@ -35,6 +33,8 @@ class ToyBrainsData:
         os.makedirs(self.IMGS_DIR, exist_ok=True)
         os.makedirs(self.LBLS_DIR, exist_ok=True)
         self.debug = debug
+        self.config = config
+
         # forcefully set a random seed
         if self.debug: seed = 42
         
@@ -94,6 +94,12 @@ class ToyBrainsData:
         
         # (2) Import the configured Covariates and its rules
         self.COVARS = COVARS
+        
+        if self.config is not None:
+            pkg = importlib.import_module(f'setting.{self.config}')
+            cfg = pkg.c
+            loop_update_rules(RULES_COV_TO_GEN, cfg)
+        
         self.RULES_COV_TO_GEN = RULES_COV_TO_GEN
 
         
@@ -334,12 +340,13 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--n_samples', default=100, type=int)
     parser.add_argument('--dir', default='toybrains', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
+    parser.add_argument('-c', default = None, type=str)
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
     
     IMG_SIZE = 64 # 64 pixels x 64 pixels
     RANDOM_SEED = 42 if args.debug else None
     # create the output folder
-    dataset = ToyBrainsData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED)   
+    dataset = ToyBrainsData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED, config = args.c)   
     # create the shapes dataset
     dataset.generate_dataset(n_samples=args.n_samples)

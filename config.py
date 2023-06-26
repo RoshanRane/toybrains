@@ -2,7 +2,6 @@ import numpy as np
 import os, shutil 
 from copy import copy, deepcopy
 
-
 class PROB_VAR:
     '''Class to init a probabilistic variable that has states with a probability 
      distribution which can be modified and sampled from'''
@@ -178,3 +177,11 @@ RULES_COV_TO_GEN = {
             
             'vent_thick'        :dict(idxs=(-1,-2), amt=(5,3)) }}
 }
+
+def _update_rules_cov_to_gen(dictionary, key, subkey, new_values):
+    dictionary[key][subkey] = new_values
+    
+def loop_update_rules(dictionary, content):
+    
+    for key, subkey, new_values in content:
+        _update_rules_cov_to_gen(dictionary, key, subkey, new_values)
