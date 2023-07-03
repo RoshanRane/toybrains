@@ -1,6 +1,9 @@
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector as selector
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
@@ -29,7 +32,7 @@ def _get_data(df, data_type='x'):
     get strucutral data using data_type criteria
     '''
     
-    assert data_type in ['x', 'c', 'cx', 'xc'], "data type should be either x, c, or cx"
+    assert data_type in ['x', 'cx', 'xc'], "data type should be either x, or cx, or xc"
     
     DF = df.copy()
     
@@ -94,11 +97,22 @@ def run_lreg(data):
         ]
     )
     
-    pipe = make_pipeline(preprocessor, LogisticRegression(max_iter=1000, random_state=42))
-    parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
+    num = len(set(target_train))
+    
+    if num == 2:
+        pipe = make_pipeline(preprocessor, LogisticRegression(max_iter=1000, random_state=42))
+        parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
+    
+    # if num == 4:
+    #     pipe = make_pipeline(preprocessor, OneVsRestClassifier(SVC()))
+    #     parameters = {'onevsrestclassifier': [0.1, 1, 10, 100]}
+        
+    if num > 4:
+        pipe = make_pipeline(preprocessor, LinearRegression())
+        parameters = {'linearregression__fit_intercept': [True, False]}
     
     # Use GridSearchCV to find the optimal hyperparameters for the pipeline
-
+    
     clf = GridSearchCV(pipe, param_grid=parameters)
     
     # Train and fit logistic regression model
@@ -118,7 +132,7 @@ def run_lreg(data):
     tr_acc = clf.score(data_train, target_train)
     vl_acc = clf.score(data_val, target_val)
     te_acc = clf.score(data_test, target_test)
-
+    
     print(f"Train Accuracy: {tr_acc:>8.4f} "
           f"Validation Accuracy: {vl_acc:>8.4f} "
           f"Test Accuracy: {te_acc:>8.4f}")

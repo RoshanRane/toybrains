@@ -43,7 +43,10 @@ def generate_dataset(raw_csv_path, label, random_seed=42, debug=False):
     
     # assign target label
     
-    DF['label'] = DF[label].astype(int)
+    if 'cov_age' == label:
+        DF['label'] = DF['cov_age']
+    else:
+        DF['label'] = pd.factorize(DF[label])[0]
     
     # split dataset into 80% for training and 20% for remaining
     
