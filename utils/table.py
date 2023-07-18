@@ -32,7 +32,7 @@ def _get_data(df, data_type='x'):
     get strucutral data using data_type criteria
     '''
     
-    assert data_type in ['x', 'cx', 'xc'], "data type should be either x, or cx, or xc"
+    assert data_type in ['x', 'cx', 'c', 'xc'], "data type should be either x, or cx, or xc"
     
     DF = df.copy()
     

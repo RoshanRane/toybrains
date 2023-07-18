@@ -2,7 +2,7 @@ import numpy as np
 import random
 import pandas as pd
 from matplotlib import pyplot as plt
-plt.style.use("seaborn-v0_8-whitegrid") #'dark_background','seaborn-v0_8-muted', 'seaborn-v0_8-notebook',
+plt.style.use("seaborn-v0_8-white") #'dark_background','seaborn-v0_8-muted', 'seaborn-v0_8-notebook',
 from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
 import math
@@ -347,6 +347,8 @@ if __name__ == "__main__":
     IMG_SIZE = 64 # 64 pixels x 64 pixels
     RANDOM_SEED = 42 if args.debug else None
     # create the output folder
-    dataset = ToyBrainsData(out_dir=args.dir, img_size=IMG_SIZE, debug=args.debug, seed=RANDOM_SEED, config = args.c)   
+    dataset = ToyBrainsData(out_dir=args.dir, config=args.c,
+                            img_size=IMG_SIZE, debug=args.debug, 
+                            seed=RANDOM_SEED)   
     # create the shapes dataset
     dataset.generate_dataset(n_samples=args.n_samples)
