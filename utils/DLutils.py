@@ -80,7 +80,7 @@ def generate_dataset(raw_csv_path, label, random_seed=42, debug=False):
     
 
 def get_dataset_loaders(data_split_dfs,
-                        data_dir="toybrains/images", 
+                        data_dir="toybrains", 
                         batch_size=16, shuffle=True, 
                         num_workers=0, transform=[],
                         ):
@@ -92,12 +92,13 @@ def get_dataset_loaders(data_split_dfs,
     reference: https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit05-lightning/5.5-datamodules
     TODO: refactoring ToyBrainsDataModule
     '''
+    # (TODO) Validation and Test should be set shuffle=False (wrong imlementation)
     data_loaders = []
     
     for data_split_df in data_split_dfs:
         dataset = ToyBrainsDataset(
                     df=data_split_df,
-                    img_dir=data_dir,
+                    img_dir=f'dataset/{data_dir}/images',
                     transform=transforms.Compose(
                         [transforms.ToTensor()]+transform)
                     )

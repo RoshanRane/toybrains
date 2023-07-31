@@ -21,10 +21,10 @@ from helper.viz_helpers import plot_col_dists
 
 class ToyBrainsData:
     
-    def __init__(self, out_dir="./shapes/", img_size=64, seed=None, debug=False, njobs=1, config=None):
+    def __init__(self, out_dir="shapes", img_size=64, seed=None, debug=False, njobs=1, config=None):
         
         self.I = img_size
-        self.OUT_DIR = out_dir
+        self.OUT_DIR = f'./dataset/{out_dir}'
         self.IMGS_DIR = f'{self.OUT_DIR}/images/'
         self.LBLS_DIR = f'{self.OUT_DIR}/masks/'
         self.njobs = njobs
@@ -32,8 +32,8 @@ class ToyBrainsData:
         os.makedirs(self.OUT_DIR, exist_ok=True)
         os.makedirs(self.IMGS_DIR, exist_ok=True)
         os.makedirs(self.LBLS_DIR, exist_ok=True)
-        self.debug = debug
-        self.config = config
+        self.debug = False if (debug == 'False' or debug == False) else True
+        self.config = None if (config == 'None' or config == None) else config
 
         # forcefully set a random seed
         if self.debug: seed = 42
@@ -339,8 +339,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--n_samples', default=100, type=int)
     parser.add_argument('--dir', default='toybrains', type=str)
-    parser.add_argument('-d', '--debug',  action='store_true')
     parser.add_argument('-c', default = None, type=str)
+    parser.add_argument('-d', '--debug',  action='store_true')
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
     

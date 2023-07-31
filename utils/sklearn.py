@@ -28,13 +28,14 @@ import seaborn as sns
 
 # functions
 
-def get_data(df):
+def get_data(df, data_dir):
     
-    img_dir = 'toybrains/images'
-    
+    img_dir = f'dataset/{data_dir}/images'
+
     # set up the image collection from list of paths
     
     image_paths = [os.path.join(img_dir, str(i).zfill(5) + '.jpg') for i in df['subjectID']]
+    print(image_paths[0])
     image_collection = imread_collection(image_paths)
     
     # convert image into numpy array
@@ -51,7 +52,7 @@ def get_data(df):
     
     return X, y
 
-def get_reduc_loader(dataset, method='PCA', n_components=3, seed=42, save=False):
+def get_reduc_loader(dataset, data_dir, method='PCA', n_components=3, seed=42, save=False):
     '''
     conduct the dimensionality reduction and return values
     
@@ -70,7 +71,7 @@ def get_reduc_loader(dataset, method='PCA', n_components=3, seed=42, save=False)
         save the values in new csv
         
     '''
-    
+    print('I am here')
     # Add more methods here as needed
     
     methods = {
@@ -84,25 +85,25 @@ def get_reduc_loader(dataset, method='PCA', n_components=3, seed=42, save=False)
     assert method in methods, f"Invalid method: {method}, if you need please add it manually"
     
     DF_train, DF_val, DF_test = dataset
-    
-    tr_X, target_train = get_data(df = DF_train)
-    vl_X, target_val = get_data(df = DF_val)
-    te_X, target_test = get_data(df = DF_test)
+
+    tr_X, target_train = get_data(df = DF_train, data_dir = data_dir)
+    vl_X, target_val = get_data(df = DF_val, data_dir = data_dir)
+    te_X, target_test = get_data(df = DF_test, data_dir = data_dir)
 
     # Get the corresponding class from the dictionary
-    
+
     reducer_class = methods[method]
 
     # Create an instance of the dimensionality reduction class
-    
+
     reducer = reducer_class(n_components=n_components) #, random_state=seed)
 
     # Apply dimensionality reduction
-    
+
     data_train = reducer.fit_transform(tr_X)
     data_val = reducer.transform(vl_X)
     data_test = reducer.transform(te_X)
-    
+    print('gone')
     # Save the model into new csv file
     
     if save:
@@ -158,7 +159,7 @@ def run_logistic_regression(dataset):
           f"Validation Accuracy: {vl_acc:>8.4f} "
           f"Test Accuracy: {te_acc:>8.4f}")
     
-    return (tr_acc, vl_acc, te_acc)
+    return (tr_acc, vl_acc, te_acc), pipe
 
     
 #################################################################################################
