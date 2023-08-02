@@ -4,6 +4,7 @@ import random
 from glob import glob
 from datetime import datetime
 from collections import Counter
+from tqdm import tqdm
 
 import pandas as pd
 import numpy as np
@@ -63,11 +64,11 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
         # (TODO) There is no difference on debug mode
         os.system("rm -rf results/debug_run 2> /dev/null")
         print(f'DATA DIR : {DATA_DIR}\nDATA N   : {DATA_N}\n')
-        DF_DIR = Path.cwd() / 'results' / 'debug_run' / start_time.strftime("%Y%m%d-%H%M")
-        print(f'Save in {DF_DIR}')
+        OUT_DIR = Path.cwd() / 'results' / 'debug_run' / start_time.strftime("%Y%m%d-%H%M")
+        print(f'Save in {OUT_DIR}')
     else:
-        DF_DIR = Path.cwd() / 'results' / DATA_DIR / start_time.strftime("%Y%m%d-%H%M")
-    DF_DIR.mkdir(parents = True, exist_ok = True)
+        OUT_DIR = Path.cwd() / 'results' / DATA_DIR / start_time.strftime("%Y%m%d-%H%M")
+    OUT_DIR.mkdir(parents = True, exist_ok = True)
     
     # DEFAULT SETTING
     # (TODO) could be merge with setting as dict with below
@@ -112,7 +113,7 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
             raw_csv_path = file_path,
             DATA_DIR = DATA_DIR,
             DATA_N = DATA_N,
-            DF_DIR = DF_DIR,
+            OUT_DIR = OUT_DIR,
             seed = seed,
             debug = debug
         )
@@ -125,7 +126,7 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
             raw_csv_path = file_path,
             DATA_DIR = DATA_DIR,
             DATA_N = DATA_N,
-            DF_DIR = DF_DIR,
+            OUT_DIR = OUT_DIR,
             labels = labels,
             models = models,
             batch_size = batch_size,
@@ -147,7 +148,7 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
             raw_csv_path = file_path,
             DATA_DIR = DATA_DIR,
             DATA_N = DATA_N,
-            DF_DIR = DF_DIR,
+            OUT_DIR = OUT_DIR,
             labels = labels,
             methods = methods,
             n_components = n_components,
@@ -158,13 +159,13 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
     
     print(f'running a total of {num} different settings of models')
     
-    df = pd.concat([pd.read_csv(csv) for csv in glob(str(DF_DIR / 'run_*.csv'))], ignore_index=True)
-    df = df.sort_values(["dataset", "i", "o", "type", "model"]) # sort
+    df = pd.concat([pd.read_csv(csv) for csv in glob(f"{str(OUT_DIR)}/run_*.csv")], ignore_index=True)
+    df = df.sort_values(["dataset", "inp", "out", "type", "model"]) # sort
     # (TODO) Reorder columns for readability
-    df.to_csv(DF_DIR / "run.csv", index=False)
+    df.to_csv(f"{str(OUT_DIR)}/run.csv", index=False)
     
     # delete the temp csv files
-    os.system(f'rm {DF_DIR / "run_*.csv"}')
+    os.system(f"rm {str(OUT_DIR)}/run_*.csv")
     
     runtime = str(datetime.now()-start_time).split(".")[0]
     print(f'TOTAL RUNTIME: {runtime}')
@@ -174,7 +175,7 @@ def run_baseline(
     raw_csv_path,
     DATA_DIR,
     DATA_N,
-    DF_DIR,
+    OUT_DIR,
     seed = 42,
     debug = False,
 ):
@@ -190,8 +191,7 @@ def run_baseline(
         raw_csv_path input directory
     DATA_N : string
         n samples
-    DF_DIR : pathlib.PosixPath
-        run.csv output directory
+    OUT_DIR : string path or pathlib.PosixPath for the run.csv output directory
     seed : int, default : 42
         random state for reproducibility
     debug : boolean, default : False
@@ -205,11 +205,10 @@ def run_baseline(
     labels : lblbin_shp, lblbin_shp-vol, lblbin_shp-vent, cov_sex, cov_age, cov_site
     model : logistic regression, linear regression (pending)
     
-    No hyperparmater tuning support
+    No hyperparmater tuning supported
     
     '''
-    if debug:
-        print('run baseline')
+    if debug: print('run baseline')
         
     common = {
         "dataset" : DATA_DIR,
@@ -217,56 +216,73 @@ def run_baseline(
         "n_samples" : DATA_N,
     }
     
-    # TODO cov_age kernel restarting error
+    start_time = datetime.now()
+    # TODO cov_age kernel restarting error - TODO this should be automatically populated based on the csv
     labels = ['lblbin_shp', 'lblbin_shp-vol', 'lblbin_shp-vent', 'cov_sex', 'cov_site'] #, 'cov_age']
     features = ['x', 'x+c', 'c', 'c-y', 'x+c-y']
+    all_settings = []
+    for lbl in labels:
+        for ftr in features:
+            all_settings.append((lbl,ftr))
+    print(f'running a total of {len(all_settings)} different settings of [input features] x [labels]')
     
     # TODO parallel needed with settings dictionary
     # loop
-    for label in labels:
-        for feature in features:
-            
-            # split the dataset for training, validation, and test from raw dataset
-            dataset = generate_dataset(raw_csv_path, label, seed)
-            
-            # load the dataset
-            data = get_table_loader(dataset=dataset, label=label, data_type=feature, seed=seed)
-            if debug: print(f'Inputs: {data[0].columns}')
+    for label, feature in tqdm(all_settings):
+        
+        # split the dataset for training, validation, and test from raw dataset
+        dataset = generate_dataset(raw_csv_path, label, seed)
+        
+        # load the dataset
+        data = get_table_loader(dataset=dataset, label=label, data_type=feature, seed=seed)
+        if debug: print(f'Inputs: {data[0].columns}')
 
-            # run logistic regression and linear regression for tabular dataset
-            output, pipe = run_lreg(data)
-            num = pipe[0]
-            train_metric, val_metric, test_metric = output
-            if num == 2: model_name = 'logistic_regression'
-            if num == 4: model_name = 'multinomial_logistic_regression'
-            if num > 4: model_name = 'linear_regression'
-            
-            if debug:
-                print(f"Train metric: {train_metric:>8.4f} "
-                      f"Validation metric: {val_metric:>8.4f} "
-                      f"Test metric: {test_metric:>8.4f}")
-            
-            result = {
-                "i" : feature,
-                "o" : label,
-                "model" : model_name,
-                "model_config" : pipe,
-                "train_metric" : train_metric,
-                "validation_metric" : val_metric,
-                "test_metric" : test_metric
-            }
-            
-            result.update(common)
-            
-            df = pd.DataFrame([result])
-            df.to_csv(DF_DIR / f"run_bsl_{label}_{feature}_{model_name}.csv", index=False)
+        # run logistic regression and linear regression for tabular dataset
+        output, pipe = run_lreg(data)
+        num = pipe[0]
+        train_metric, val_metric, test_metric = output
+        if num == 2: model_name = 'logistic_regression'
+        if num == 4: model_name = 'multinomial_logistic_regression'
+        if num > 4: model_name = 'linear_regression'
+        
+        if debug:
+            print(f"Train metric: {train_metric:>8.4f} "
+                  f"Validation metric: {val_metric:>8.4f} "
+                  f"Test metric: {test_metric:>8.4f}")
+        
+        result = {
+            "inp" : feature,
+            "out" : label,
+            "model" : model_name,
+            "model_config" : pipe,
+            "train_metric" : train_metric,
+            "val_metric" : val_metric,
+            "test_metric" : test_metric
+        }
+        
+        result.update(common)
+        
+        df = pd.DataFrame([result])
+        df.to_csv(f"{str(OUT_DIR)}/run_bsl_{label}_{feature}_{model_name}.csv", index=False)
+    
+    df = pd.concat([pd.read_csv(csv) for csv in glob(f"{str(OUT_DIR)}/run_*.csv")], ignore_index=True)
+    df = df.sort_values(["dataset", "inp", "out", "type", "model"]) # sort
+    # (TODO) Reorder columns for readability
+    df.to_csv(f"{str(OUT_DIR)}/run.csv", index=False)
+    
+    # delete the temp csv files
+    os.system(f"rm {str(OUT_DIR)}/run_bsl_*.csv")
+    
+    runtime = str(datetime.now()-start_time).split(".")[0]
+    print(f'TOTAL RUNTIME: {runtime}')
+    
 
 # run supervised learning on images
 def run_supervised(
     raw_csv_path,
     DATA_DIR,
     DATA_N,
-    DF_DIR,
+    OUT_DIR,
     labels = None,
     models = None,
     batch_size = 16,
@@ -291,7 +307,7 @@ def run_supervised(
         raw_csv_path input directory
     DATA_N : string
         n samples
-    DF_DIR : pathlib.PosixPath
+    OUT_DIR : pathlib.PosixPath
         run.csv output directory
     labels : (None | list), default : None
         list of label
@@ -325,7 +341,7 @@ def run_supervised(
     # set the seed for Lightning
     L.seed_everything(seed)
     
-    # (TODO) sanity check on raw_csv_path, DATA_DIR, and DF_DIR
+    # (TODO) sanity check on raw_csv_path, DATA_DIR, and OUT_DIR
     if debug:
         DATA_DF = pd.read_csv(raw_csv_path)
         print(DATA_DF.info())
@@ -360,8 +376,8 @@ def run_supervised(
             "dataset" : DATA_DIR,
             "type" : "supervised",
             "n_samples" : DATA_N,
-            "i" : "images",
-            "o" : label,
+            "inp" : "images",
+            "out" : label,
         }
             
         # (TODO) add the accuracy when predicting the most frequent class label
@@ -400,7 +416,7 @@ def run_supervised(
                 max_epochs=max_epochs,
                 accelerator=accelerator,
                 devices=device,
-                logger=CSVLogger(save_dir=DF_DIR / f"supervised_logs/{label}", name=model_name),
+                logger=CSVLogger(save_dir=f"{str(OUT_DIR)}/supervised_logs/{label}", name=model_name),
                 deterministic=True,
                 enable_progress_bar=False
             )
@@ -427,20 +443,20 @@ def run_supervised(
                 # "epoch" : max_epochs,
                 # "batch_size" : batch_size,
                 "train_metric" : train_acc,
-                "validation_metric" : val_acc,
+                "val_metric" : val_acc,
                 "test_metric" : test_acc,
             }
             result.update(common)
             
             df = pd.DataFrame([result])
-            df.to_csv(DF_DIR / f"run_sup_{label}_{model_name}.csv", index=False)
+            df.to_csv(f"{str(OUT_DIR)}/run_sup_{label}_{model_name}.csv", index=False)
 
 # run unsupervised learning on images
 def run_unsupervised(
     raw_csv_path,
     DATA_DIR,
     DATA_N,
-    DF_DIR,
+    OUT_DIR,
     labels = None,
     methods = None,
     n_components = None,
@@ -457,7 +473,7 @@ def run_unsupervised(
         raw_csv_path input directory
     DATA_N : string
         n samples
-    DF_DIR : pathlib.PosixPath
+    OUT_DIR : pathlib.PosixPath
         run.csv output directory
     labels : (None | list), default : None
         list of label
@@ -499,15 +515,15 @@ def run_unsupervised(
                 train_metric, val_metric, test_metric = metric
                 model_name = f'{methods}-logistic_regression'
                 setting = {
-                    "i" : f'images_to_{n}_components',
-                    "o" : label,
+                    "inp" : f'images_to_{n}_components',
+                    "out" : label,
                     "model" : model_name,
                     "model_config" : pipe,
                     "train_metric" : train_metric,
-                    "validation_metric" : val_metric,
+                    "val_metric" : val_metric,
                     "test_metric" : test_metric
                 }
                 result.update(common)
                 
                 df = pd.DataFrame([result])
-                df.to_csv(DF_DIR / f"run_usp_{label}_{n}_{model_name}.csv", index=False)
+                df.to_csv(f"{str(OUT_DIR)}/run_usp_{label}_{n}_{model_name}.csv", index=False)

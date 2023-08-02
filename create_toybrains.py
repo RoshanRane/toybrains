@@ -33,7 +33,7 @@ class ToyBrainsData:
         os.makedirs(self.IMGS_DIR, exist_ok=True)
         os.makedirs(self.LBLS_DIR, exist_ok=True)
         self.debug = False if (debug == 'False' or debug == False) else True
-        self.config = None if (config == 'None' or config == None) else config
+        self.config = None if (config == 'None') else config
 
         # forcefully set a random seed
         if self.debug: seed = 42
@@ -96,6 +96,8 @@ class ToyBrainsData:
         self.COVARS = COVARS
         
         if self.config is not None:
+            # if user provided '.py' in the config filename argument then remove it
+            if self.config[-3:]=='.py': self.config = self.config[:-3]
             pkg = importlib.import_module(f'setting.{self.config}')
             cfg = pkg.c
             loop_update_rules(RULES_COV_TO_GEN, cfg)
