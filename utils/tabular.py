@@ -9,52 +9,38 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import accuracy_score
 
-def _get_columns(df, label, data_type):
-    '''
-    generate the columns
-    '''
-    DF = df.copy()
-    
-    DF_columns = []
-    
-    if 'x' in data_type:
-        New_columns = DF.columns[DF.columns.str.startswith('gen')].tolist()
-        DF_columns += New_columns
-    
-    if 'c' in data_type:
-        New_columns = DF.columns[DF.columns.str.startswith('cov')].tolist()
-        DF_columns += New_columns
-        
-    if '-y' in data_type:
-        if label in DF_columns:
-            DF_columns.remove(label)
-    
-    return DF_columns
+# helper
 
-def _get_data(df, label, data_type='x'):
+def _get_data(df, label, data_type='a'):
     '''
-    get strucutral data using data_type criteria
+    get tabula data using data_type criteria
     '''
     
-    # (TODO) Refactoring needed
-    assert '+y' not in data_type, "y should not be +y"
-    assert data_type in ['x', 'c+x', 'c', 'x+c', 'c-y', 'x+c-y', 'c+x-y'], "data type should be either x, or c+x, or x+c, or c-y or x+c-y, or c+x-y"
+    assert data_type in ['a', 'c+a', 'c', 'a+c'], "data type should be either a, or c+a, or a+c"
+    assert label in df.columns, f"label {label} should be in dataframe"
     
     DF = df.copy()
     
     # set the target label
-    
     target = list(DF['label'])
     
     # set the data using data_type
-    
-    columns = _get_columns(DF, label, data_type)
+    columns = []
+    if 'a' in data_type:
+        new_columns = DF.columns[DF.columns.str.startswith('gen')].tolist()
+        columns += new_columns
+    if 'c' in data_type:
+        new_columns = DF.columns[DF.columns.str.startswith('cov')].tolist()
+        columns += new_columns
+        if label in columns: columns.remove(label)
     
     data = DF[columns]
     
     return data, target
 
-def get_table_loader(dataset, label, data_type='x', seed=42):
+# function
+
+def get_table_loader(dataset, label, data_type='a', random_seed=42):
     '''
     get structural data return to data
     
@@ -63,8 +49,8 @@ def get_table_loader(dataset, label, data_type='x', seed=42):
     dataset : tuple
         tuple of (DF_train, DF_val, DF_test)
         
-    data_type : string, defuault : x
-        select the input type either x, c, or xc
+    data_type : string, defuault : a
+        select the input type either a, c, or a+c, or c+a
     
     seed : integer, default : 42
         random seed

@@ -8,3 +8,5 @@ toybrains/
 *.cpython-*.pyc
 nohup.out
 **/nohup*.out
+results/**/**/run.csv
+jupyterlog.out
