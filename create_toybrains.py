@@ -19,7 +19,7 @@ import importlib
 import graphviz
 from causalgraphicalmodels import CausalGraphicalModel
 
-from helper.viz_helpers import plot_col_dists
+# from utils.vizutils import plot_col_dists
 
 #################################  Helper functions  ###############################################
 
@@ -88,7 +88,7 @@ class ToyBrainsData:
     
     def __init__(self, out_dir="shapes", 
                  img_size=64, seed=None, njobs=1, 
-                 base_config="configs.base", 
+                 base_config="configs.lbl5cov3_base", 
                  tweak_config=None,
                  debug=False):
         
@@ -116,6 +116,8 @@ class ToyBrainsData:
         self._setup_genvars_covars()
         
         # Import the covariates and the base configured in covariates-to-image-attribute relationships
+        # if user provided '.py' in the config filename argument then remove it
+        if base_config[-3:]=='.py': base_config = base_config[:-3]
         base_config = importlib.import_module(base_config)
         assert hasattr(base_config, 'COVARS')
         self.COVARS = {cov: PROB_VAR(name=cov, **states) for cov, states in base_config.COVARS.items()}
@@ -204,6 +206,7 @@ class ToyBrainsData:
         for name, var in self.COVARS.items():
             self.df[name] = np.nan
             
+            
     def reset_genvars(self):
         [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
 
@@ -235,8 +238,7 @@ class ToyBrainsData:
                 self.GENVARS[attr].bump_up_weight(**attr_rule)
         
         
-    def generate_dataset(self, n_samples):
-        """Creates toy dataset and save to disk."""
+    def generate_dataset_table(self, n_samples):
         self.init_df()
             
         if self.debug:
@@ -245,29 +247,58 @@ class ToyBrainsData:
                 print(f"{name} {' '*(25-len(name))} {var.states}")
             
         print("Generating {} synthetic toy brain images:".format(n_samples))
-
-        ## TODO parallize data gen
-        # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
+        
         for subID in tqdm(range(n_samples)):
-            
             # first reset all generative image attributes to have uniform distribution
             self.reset_genvars()
             # (1) sample the covariates and labels for this data point and influence the image generation probabilities s
             covars = {name: covar.sample()  for name, covar in self.COVARS.items()}
             self.adjust_genvar_dists(covars, self.RULES_COV_TO_GEN)
+            # (2) sample the image attributes conditional on the sampled labels and covariates 
+            genvars = {var_name: gen_var.sample() for var_name, gen_var in self.GENVARS.items()}
+            
+            # (3) store the sampled covariates and labels  
+            for k,v in covars.items():
+                self.df.at[f'{subID:05}', k] = v
+            # combine the gen params 'brain-vol_radmajor' and 'brain-vol_radminor' into one 'brain_vol'
+            genvars.update({'brain-vol': math.pi*genvars['brain-vol_radmajor']*genvars['brain-vol_radminor'] })
+            # calculate the volume of all regular_polygon shapes
+            for shape_pos in self.SHAPE_POS.keys():
+                genvars.update({
+                    f'{shape_pos}_vol': 
+                    self.area_of_regular_polygon(
+                        n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
+                
+            # store the generative properties with a prefix 'gen_'
+            for k,v in genvars.items():
+                if '-rad' in k: # radius is stored as a secondary gen variable 
+                    self.df.at[f'{subID:05}', '_gen_'+k] = v
+                else:
+                    self.df.at[f'{subID:05}', 'gen_'+k] = v
+            
+            # save the data csv every 1000 samples
+            if subID//1000 == 0:
+                self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")      
+            
+        # format the subject IDs same as the filename
+        self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")
+        
+        return self.df
+        
+    
+    def generate_dataset(self, n_samples):
+        """Creates toy dataset and save to disk."""
+        # first generate dataset table and update self.df
+        self.generate_dataset_table(n_samples)
+        ## TODO parallize data gen
+        # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
+        for subID in tqdm(range(n_samples)):
             
             # Create a new image of size 64x64 with a black background and a draw object on it
             image = Image.new('RGB',(self.I,self.I),(0,0,0))
             draw = ImageDraw.Draw(image)
-
-            # (3) sample the image attributes conditional on the sampled labels and covariates 
-            genvars = {}
-            for gen_var_name, gen_var in self.GENVARS.items():
-                if ('brain_' in gen_var_name) or (gen_var_name=='brain-int_border'):
-                    genvars.update({gen_var_name: gen_var.sample()})
-            
-            # (4) Draw the brain 
-            # (4a) Draw an outer ellipse of the image
+            # Draw the brain 
+            # (a) Draw an outer ellipse of the image
             x0,y0 = (self.ctr[0]-genvars['brain-vol_radminor'],
                      self.ctr[1]-genvars['brain-vol_radmajor'])
             x1,y1 = (self.ctr[0]+genvars['brain-vol_radminor']-1,
@@ -281,11 +312,7 @@ class ToyBrainsData:
             # save the brain mask
             brain_mask = (np.array(image).sum(axis=-1) > 0) #TODO save it
 
-            # (4b) Draw ventricles as 2 touching arcs 
-            for gen_var_name, gen_var in self.GENVARS.items():
-                if ('vent_' in gen_var_name):
-                    genvars.update({gen_var_name: gen_var.sample()})
-
+            # (b) Draw ventricles as 2 touching arcs 
             xy_l = (self.I*.3, self.I*.3, self.I*.5, self.I*.5)
             xy_r = (self.I*.5, self.I*.3, self.I*.7, self.I*.5)
             draw.arc(xy_l, start=+310, end=+90, 
@@ -295,50 +322,18 @@ class ToyBrainsData:
                      fill=self.get_color_val(genvars['brain-int_border']), 
                      width=genvars['vent_thick'])
 
-            # (4c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
+            # (c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
             # with different size, color and rotations
             for shape_pos, (x,y) in self.SHAPE_POS.items():
-                
-                for gen_var_name, gen_var in self.GENVARS.items():
-                    if (shape_pos in gen_var_name):
-                        genvars.update({gen_var_name: gen_var.sample()})
                 
                 draw.regular_polygon((x,y,genvars[f'{shape_pos}_vol-rad']), 
                                      n_sides=genvars[f'{shape_pos}_curv'], 
                                      rotation=np.random.randint(0,360),
                                      fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
                                      outline=self.get_color_val(genvars['brain-int_border']))
-            # (4d) save the image
+            # (d) save the image
             image.save(f"{self.IMGS_DIR}{subID:05}.jpg")
             
-            # (5) store the sampled covariates and labels  
-            for k,v in covars.items():
-                self.df.at[f'{subID:05}', k] = v
-            # combine the gen params 'brain-vol_radmajor' and 'brain-vol_radminor' into one 'brain_vol'
-            genvars.update({'brain_vol': math.pi*genvars['brain-vol_radmajor']*genvars['brain-vol_radminor'] })
-            # calculate the the volume of all regular_polygon shapes
-            for shape_pos in self.SHAPE_POS.keys():
-                genvars.update({
-                    f'{shape_pos}_vol': 
-                    self.area_of_regular_polygon(
-                        n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
-                
-            # store the generative properties with a prefix 'gen_'
-            for k,v in genvars.items():
-                if '-rad' in k: # radius is stored as the secondary gen variable 
-                    self.df.at[f'{subID:05}', '_gen_'+k] = v
-                else:
-                    self.df.at[f'{subID:05}', 'gen_'+k] = v
-            
-            ##TODO store the weights or generative probabilities of all paramaters too
-            # if debug:  print(f"variable {self.name} with states {self.states} and weights={self.weights}")
-            
-            # save the data csv every 1000 samples
-            if subID//1000 == 0:
-                self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")      
-            
-        # format the subject IDs same as the filename
-        self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")
         
         
     def get_color_val(self, color):
@@ -530,7 +525,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--n_samples', default=100, type=int)
     parser.add_argument('--dir', default='toybrains', type=str)
-    parser.add_argument('-c', default = None, type=str)
+    parser.add_argument('-c', default = 'configs.lbl5cov3_base', type=str)
+    parser.add_argument('--config_tweak', default = None, type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
@@ -538,7 +534,9 @@ if __name__ == "__main__":
     IMG_SIZE = 64 # 64 pixels x 64 pixels
     RANDOM_SEED = 42 if args.debug else None
     # create the output folder
-    dataset = ToyBrainsData(out_dir=args.dir, config=args.c,
+    dataset = ToyBrainsData(out_dir=args.dir, 
+                            base_config=args.c,
+                            tweak_config=args.config_tweak,
                             img_size=IMG_SIZE, debug=args.debug, 
                             seed=RANDOM_SEED)   
     # create the shapes dataset
