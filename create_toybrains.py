@@ -115,7 +115,6 @@ class ToyBrainsData:
         # initialize all the generative properties for the images and the labels and covariates
         self._setup_genvars_covars()
         
-        
         # Import the covariates and the base configured in covariates-to-image-attribute relationships
         base_config = importlib.import_module(base_config)
         assert hasattr(base_config, 'COVARS')
@@ -365,6 +364,11 @@ class ToyBrainsData:
     def show_current_config(self, show_dag=True, 
                             show_attr_probas=True, 
                             return_causal_graph=False):
+        """
+        show_attr_probas = True : shows how the sampling probability distribution of the different
+                                  image attributes change for each covariate/label state. This feature
+                                   is used to verify that all the intended weight changes were applied.
+        """
         
         # compute the nodes and edges of the Causal Graphical Model
         nodes, edges = set(), set()
@@ -374,6 +378,7 @@ class ToyBrainsData:
                 for at in ats.keys():
                     nodes.add(at)
                     edges.add((c,at))
+                    
         nodes = sorted(list(nodes))
         edges = sorted(list(edges))
         
@@ -384,58 +389,75 @@ class ToyBrainsData:
         
         if show_attr_probas:
             
+            # cov_cols, attr_cols = zip(*edges)
             attr_cols = sorted(list(self.GENVARS.keys()))
             cov_cols = sorted(list(self.COVARS.keys()))
-            subplot_nrows = len(attr_cols)
-            subplot_ncols = len(cov_cols)
+            subplot_nrows = len(cov_cols)
+            subplot_ncols = len(attr_cols)
             fs=12
-             # create 
+             # create figure
             f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
                                   figsize=(2+2*subplot_ncols, 2*subplot_nrows),
-                                  sharex='row', sharey=True, constrained_layout=True)
-            f.suptitle("Probability distribution of image attributes (rows) vs different conditions of the covariates/labels (cols):", 
+                                  sharex="col", sharey="row", constrained_layout=True)
+            f.suptitle("Image attribute generation probabilities (cols) set for different covariates or labels (rows)", 
                        fontsize=fs+6)
-            plt.ylim([0,1]) # probability
             
+            max_attr_len = int(np.array([attr.k for _,attr in self.GENVARS.items()]).max())
+            
+            # each row shows one covariate vs all attributes
             for i, axis_row in enumerate(axes):
-                attr_name = attr_cols[i]
-                attr = self.GENVARS[attr_name]
+                
+                cov_name = cov_cols[i]
+                cov = self.COVARS[cov_name]
+                
+                # interatively collect the weights of all attributes for each covariate state in a dataframe
+                df = pd.DataFrame(columns=[cov_name]+attr_cols)
+                if cov.states[0] in [True, False]:
+                    df[cov_name] = df[cov_name].astype(bool)
+                # hack: reducing time by only taking few states when there are more than 5 states
+                cov_states = cov.states if len(cov.states)<=4 else  cov.states[::len(cov.states)//4]
+                
+                for cov_state in cov_states:
+                    # only trigger the change in weights caused when covariate = cov_state
+                    # do not set any other covariate state
+                    self.reset_genvars()
+                    self.adjust_genvar_dists({cov_name:cov_state}, self.RULES_COV_TO_GEN)
+                    
+                    df_temp = pd.DataFrame(index=range(max_attr_len)) 
+                    for attr_name, attr in self.GENVARS.items():
+                        k = list(range(attr.k))
+                        df_temp.loc[k, attr_name] = attr.states
+                        # normalize weights to get p-distribution 
+                        attr_probas = attr.weights/attr.weights.sum() 
+                        df_temp.loc[k, f"{attr_name}_probas"] = attr_probas
+                    
+                    # add the cov state to the whole df 
+                    df_temp[cov_name] = cov_state
+                    df = pd.concat([df, df_temp], ignore_index=True)
+                
+                # display(df)
                 
                 for j, ax in enumerate(axis_row):
                     
-                    cov_name = cov_cols[j]
-                    cov = self.COVARS[cov_name]
-                        
-                    df_temp = pd.DataFrame()
-                    # collect the weights for all states of the covariate in df_temp
-                    # hack: reducing time by only estimating on few states when there are several states
-                    cov_states = cov.states if len(cov.states)<=5 else  cov.states[::len(cov.states)//5]
-                    for cov_state in cov_states: ## TODO 
-                        
-                        dfi_temp = pd.DataFrame({attr_name: attr.states, cov_name: cov_state})
-                        self.reset_genvars()
-                        self.adjust_genvar_dists({cov_name:cov_state}, self.RULES_COV_TO_GEN)
-                        # normalize weights to get p-distribution
-                        attr_probas = attr.weights/attr.weights.sum() #+ 0.1*np.random.rand(len(attr.weights)) # add some jitter noise for the plot visibility
-                        dfi_temp["attr_probas"] = attr_probas
-                        df_temp = pd.concat([df_temp, dfi_temp], ignore_index=True)
-                    
-                    g = sns.lineplot(df_temp, x=attr_name, y="attr_probas", hue=cov_name, 
-                                     ax=ax, legend=(i==0), alpha=1)
-                    if i==0: 
-                        sns.move_legend(g, "upper center", bbox_to_anchor=(0.5,1.5), 
-                                        alignment='center', ncols=2,
-                                        title_fontproperties={'size':fs}) #, 'weight':'heavy'
-                    # set xlabel and ylabel at the top and leftside of the plots resp.
-                    ax.set_ylabel(attr_name, fontsize=fs) if j==0 else ax.set_ylabel(None)
-                    ax.set_xlabel(None)
-                    # shorten the xtick labels if it is too long
+                    attr_name = attr_cols[j]
+                    g = sns.lineplot(df, 
+                                     hue=cov_name, 
+                                     x=attr_name, y=f"{attr_name}_probas",  
+                                     ax=ax, legend=(j==0))
+                    if j==0: 
+                        sns.move_legend(g, loc="upper left", bbox_to_anchor=(-0.9,1.), 
+                                        frameon=True, title_fontproperties={'size':fs}) #, alignment='center', 'weight':'heavy'
+                    # # set xlabel and ylabel at the top and leftside of the plots resp.
+                    ax.set_ylabel(cov_name, fontsize=fs) if j==0 else ax.set_ylabel(None)
+                    # # shorten the xtick labels if it is too long
                     ticklabels = ax.get_xticklabels()
-                    if len(ticklabels[0].get_text())>6:
+                    if i==0: ax.set_title(attr_name)
+                    if len(ticklabels)>0 and len(ticklabels[0].get_text())>6:
                         for k, lbl in enumerate(ticklabels):
                             if len(lbl.get_text())>4: 
                                 ticklabels[k].set_text(lbl.get_text()[:4])
                         ax.set_xticks(ax.get_xticks(), labels=ticklabels) #, fontsize=fs-4)
+            plt.ylim([0,1]) # probability
             plt.show()
         
         
