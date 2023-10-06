@@ -1,10 +1,10 @@
 # standard python packages
-import os, sys
+import os, sys, shutil
 import random
 from glob import glob
 from datetime import datetime
 from collections import Counter
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,63 +22,7 @@ sns.set_theme(style="ticks", palette="pastel")
 
 # functions
 
-## create toybrains dataset as a function
-def run_toybrains(n_samples, data_dir, config=None, debug=False):
-    ''' run toybrains
-    
-    NOTE
-    ----
-    ! python create_toybrains.py --dir $data_dir -n $n_samples -c $config
-    '''
-    cmd = [
-        "python",            
-        "create_toybrains.py",
-        "-n", str(n_samples),
-        "--dir", str(data_dir),
-        "-c", str(config),
-    ]
-    if debug: cmd += ["--debug"]
-    subprocess.run(cmd)
-
-## create toybrains dataset using data_dict
-def generate_toybrains_list(data_dict, debug=False):
-    ''' create a toybrains using parallel
-    
-    PARAMETER
-    ---------
-    data_dict : dictionary
-        data_dict
-        
-    debug : boolean, default : False
-        debug mode
-    
-    OUTPUT
-    ------
-    path_list : list
-        list of csv path, element is a string
-    '''
-    
-    def generate_toybrains(data_dir, args, debug):
-        n_samples, config, img = args['n_samples'], args['config'], args['img']
-        
-        if img:
-            if debug: print(f"Save toybrains dataset (N={n_samples}) in 'dataset/{data_dir}'")
-            # compatible with CLI and notebook
-            run_toybrains(n_samples, data_dir, config, debug)
-            # ! python create_toybrains.py --dir $data_dir -n $n_samples -c $config
-            if debug: print(f'summary can be found in {csv_path}\n')
-            
-        csv_path = f"dataset/{data_dir}/toybrains_n{n_samples}.csv"
-        return csv_path
-    
-    n_jobs = len(data_dict) if len(data_dict) < 10 else 10
-    # parallelize the loop
-    path_list = Parallel(n_jobs=n_jobs)(delayed(generate_toybrains)(
-        data_dir, args, debug
-    ) for data_dir, args in data_dict.items())
-    
-    return path_list
-
+## TODO make it a class with 2 methods: run and plot
 # run one using settings
 def run(
     label,
@@ -94,7 +38,6 @@ def run(
     '''
     run one baesline: label X feature X trial
     ''' 
-    
     # split the dataset for training, validation, and test from raw dataset
     dataset = generate_dataset(raw_csv_path, label, CV, trial, random_seed, debug)
         
@@ -130,16 +73,15 @@ def run(
     df = pd.DataFrame([result])
     df.to_csv(f"{str(OUT_DIR)}/run_bsl_{label}_{feature}_{trial}_of_{CV}_{model_name}.csv", index=False)
 
+    
 # run baseline on both attributes and covariates
 def run_baseline(
-    raw_csv_path,
-    DATA_DIR,
-    DATA_N,
-    OUT_DIR,
-    CV = 10,
-    N_JOBS = 5,
-    random_seed = 42,
-    debug = False,
+                DATA_DIR, 
+                OUT_DIR,
+                CV = 10,
+                N_JOBS = 5,
+                random_seed = 42,
+                debug = False,
 ):
     ''' run baseline 
     
@@ -147,14 +89,9 @@ def run_baseline(
     
     PARAMETERS
     ----------
-    raw_csv_path : string
-        toybrains_n*.csv path
     DATA_DIR : string
-        raw_csv_path input directory
-    DATA_N : string
-        n samples
-    OUT_DIR : string path or pathlib.PosixPath
-        run.csv output directory
+         dataset directory containing the .csv table and the images/*.jpg
+    OUT_DIR : output directory where the run.csv results will be stored
     CV : int, default : 10
         number of cross validation
     random_seed : int, default : 42
@@ -172,14 +109,21 @@ def run_baseline(
     '''
     start_time = datetime.now()
     
+    # recreate output dirs
+    shutil.rmtree(OUT_DIR, ignore_errors=True)
+    os.makedirs(OUT_DIR)
+    
+    raw_csv_path = glob(DATA_DIR+"/*.csv")
+    assert len(raw_csv_path)==1, f"{len(raw_csv_path)} dataset tables found in {DATA_DIR}" 
+    raw_csv_path = raw_csv_path[0]
+    DF = pd.read_csv(raw_csv_path)
+    
     common = {
         "dataset" : DATA_DIR,
         "type" : "baseline",
-        "n_samples" : DATA_N,
+        "n_samples" : len(DF),
         "CV" : CV,
     }
-    
-    DF = pd.read_csv(raw_csv_path)
     labels = DF.columns[DF.columns.str.startswith('lbl')].tolist() + DF.columns[DF.columns.str.startswith('cov')].tolist()
     features = ['a', 'a+c', 'c']
     
@@ -214,103 +158,25 @@ def run_baseline(
     
     runtime = str(datetime.now()-start_time).split(".")[0]
     print(f'TOTAL RUNTIME: {runtime}')
+    return df
     
-## run toybrains dataset baseline pipeline
-def run_baseline_pipeline(
-    data_dict,
-    CV=10,
-    N_JOBS=5,
-    random_seed=42,
-    debug=False
-):
-    ''' run baseline pipeline
-    
-    baseline on attributes and covariates
-    
-    PARAMETERS
-    ----------
-    data_dict : dictionary
-        toybrains data dictionary
-        
-    CV : int
-        cross validation
-        
-    N_JOBS : int
-        N jobs
-        
-    random_seed : int
-        random seed
-    
-    debug : boolean
-        debug mode
-        
-    OUTPUT
-    ------
-    out_path_list : list
-        list of run.csv absolute path
-    
-    NOTE
-    ----
-    output saved in the directory called dataset directory key
-    '''
-    
-    start_time = datetime.now()
-    # generate the toybrains dataset
-    csv_path_list = generate_toybrains_list(data_dict, debug=debug)
-    out_path_list = []
-    # loop for data_dict
-    for (DATA_DIR, DATA), raw_csv_path in zip(data_dict.items(), csv_path_list):
-        # TODO debug mode only try one
-        DATA_N = DATA['n_samples']
-        CONFIG = DATA['config']
-        OUT_DIR = Path.cwd() / 'results' / DATA_DIR / start_time.strftime("%Y%m%d-%H%M")
-        OUT_DIR.mkdir(parents = True, exist_ok = True)
-        out_path = OUT_DIR / "run.csv"
-        out_path_list += [str(out_path.resolve())]
-        
-        print(f"{'#'*95}\nRunning Baseline on\nDATA DIR: {DATA_DIR}\nN SAMPLES: {DATA_N}\nOUTPUT DIR: {OUT_DIR}\n{'#'*95}")
-        run_baseline(
-            raw_csv_path = raw_csv_path,
-            DATA_DIR = DATA_DIR,
-            DATA_N = DATA_N,
-            OUT_DIR = OUT_DIR,
-            CV = CV,
-            N_JOBS = N_JOBS,
-            random_seed = random_seed,
-            debug = debug,
-        )
-    
-    runtime = str(datetime.now()-start_time).split(".")[0]
-    print(f'TOTAL PIPELINE RUNTIME: {runtime}')
-    return out_path_list
 
 # visualization
-def viz_baseline(
-    output_list,
-):
-    ''' vizualization output
-    
-    PARAMETER
-    ---------
-    output_list : list
-        run.csv of the output_list
-    
-    TODO add parameters
-    
+def viz_baseline(run_results):
+    ''' vizualization output of baseline models
     '''
-    num = len(output_list)
-    if len(output_list) == 1:
-        RUN = pd.read_csv(output_list[0])
-    if len(output_list) != 1:
-        DFS = [pd.read_csv(output_csv) for output_csv in output_list]
-        RUN = pd.concat(DFS)
+    if isinstance(run_results, str) and os.path.exists(run_results):
+        RUN = pd.read_csv(run_results)
+    elif isinstance(run_results, pd.DataFrame):
+        RUN = run_results
+    else:
+        raise ValueError(f"{run_results} is neither a path to the results csv nor a pandas dataframe")
     
     viz_df = RUN.copy(deep=True)
     
     x = 'test_metric'
     y = 'out'
     hue = 'inp'
-    y_order = ['lblbin_shp', 'lblbin_shp-vent', 'lblbin_shp-vol', 'cov_sex', 'cov_site', 'cov_age']
     hue_order = ['a', 'c', 'a+c']
     datasets = list(viz_df['dataset'].unique())
     num_rows = len(datasets)
@@ -332,7 +198,7 @@ def viz_baseline(
         palette = sns.color_palette()
         dodge, scale, errwidth, capsize = 0.4, 0.4, 0.9, 0.08
     
-        ax = sns.pointplot(y=y, x=x, order=y_order,
+        ax = sns.pointplot(y=y, x=x, 
                            hue=hue, hue_order=hue_order,
                            join=join, data=dfn, ax=ax,
                            errorbar='sd', errwidth=errwidth, capsize=capsize,
@@ -344,13 +210,7 @@ def viz_baseline(
         ax.set_ylabel("")
     
         # draw the chance line in the legend
-        chance = [0, 0.25, 0.5, 0.5, 0.5, 0.5]
-        for z, ch in enumerate(chance):
-            # print(f'z={z}, ch={ch}'
-            # print(f'ymin={z/len(chance)}, ymax={(z+1)/(len(chance))}')
-            ax.axvline(x=ch, ymin=z/len(chance), ymax=(z+1)/(len(chance)), label="chance", c='gray', ls='--', lw=1.5)
-        ax.axhline(y=3.5, xmin=0.29, xmax=0.5, c='gray', ls='--', lw=1.5)
-        ax.axhline(y=4.5, xmin=0.09, xmax=0.29, c='gray', ls='--', lw=1.5)
+        ax.axvline(x=0.5, label="chance", c='gray', ls='--', lw=1.5)
 
     # set custom x-axis tick positions and labels
     x_tick_positions = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
@@ -380,10 +240,9 @@ def viz_baseline(
     plt.show()
     # plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
 
-    return viz_df
     
 # summary
-def summary(
+def results_summary(
     df,
     col=None,
     cmap='YlOrBr',

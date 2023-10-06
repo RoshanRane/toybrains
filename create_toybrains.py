@@ -12,7 +12,7 @@ import os, shutil
 from joblib import Parallel, delayed  
 from copy import copy, deepcopy
 import itertools
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import argparse
 import importlib
 
