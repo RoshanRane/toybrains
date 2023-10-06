@@ -42,7 +42,7 @@ class PROB_VAR:
                 self.weights[idx] += amt[i]
             except IndexError as e:
                 print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
-    with n={self.k} states {self.states} and weights {self.weights}")
+with n={self.k} states {self.states} and weights {self.weights}")
                 raise e
         # min_window = self.k-2 if self.k-2>2 else 2
         self._smooth_weights()
@@ -86,21 +86,14 @@ class PROB_VAR:
 
 class ToyBrainsData:
     
-    def __init__(self, out_dir="shapes", 
-                 img_size=64, seed=None, njobs=1, 
+    def __init__(self, out_dir="dataset/toybrains", 
+                 img_size=64, seed=None,  
                  base_config="configs.lbl5cov3_base", 
                  tweak_config=None,
                  debug=False):
         
         self.I = img_size
-        self.OUT_DIR = f'./dataset/{out_dir}'
-        self.IMGS_DIR = f'{self.OUT_DIR}/images/'
-        self.LBLS_DIR = f'{self.OUT_DIR}/masks/'
-        self.njobs = njobs
-        shutil.rmtree(self.OUT_DIR, ignore_errors=True)
-        os.makedirs(self.OUT_DIR, exist_ok=True)
-        os.makedirs(self.IMGS_DIR, exist_ok=True)
-        os.makedirs(self.LBLS_DIR, exist_ok=True)
+        self.OUT_DIR = out_dir
         self.debug = False if (debug == 'False' or debug == False) else True
             
         # forcefully set a random seed
@@ -246,18 +239,18 @@ class ToyBrainsData:
             for name, var in self.GENVARS.items():
                 print(f"{name} {' '*(25-len(name))} {var.states}")
             
-        print("Generating {} synthetic toy brain images:".format(n_samples))
+        print("Sampling n={} toybrain image settings".format(n_samples))
         
         for subID in tqdm(range(n_samples)):
             # first reset all generative image attributes to have uniform distribution
             self.reset_genvars()
             # (1) sample the covariates and labels for this data point and influence the image generation probabilities s
-            covars = {name: covar.sample()  for name, covar in self.COVARS.items()}
+            covars = {name: covar.sample() for name, covar in self.COVARS.items()}
             self.adjust_genvar_dists(covars, self.RULES_COV_TO_GEN)
             # (2) sample the image attributes conditional on the sampled labels and covariates 
             genvars = {var_name: gen_var.sample() for var_name, gen_var in self.GENVARS.items()}
             
-            # (3) store the sampled covariates and labels  
+            # (3) store the sampled covariates and labels
             for k,v in covars.items():
                 self.df.at[f'{subID:05}', k] = v
             # combine the gen params 'brain-vol_radmajor' and 'brain-vol_radminor' into one 'brain_vol'
@@ -275,67 +268,96 @@ class ToyBrainsData:
                     self.df.at[f'{subID:05}', '_gen_'+k] = v
                 else:
                     self.df.at[f'{subID:05}', 'gen_'+k] = v
-            
-            # save the data csv every 1000 samples
-            if subID//1000 == 0:
-                self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")      
-            
-        # format the subject IDs same as the filename
-        self.df.to_csv(f"{self.OUT_DIR}/toybrains_n{n_samples}.csv")
         
         return self.df
+    
+        
+    def generate_dataset_images(self, n_jobs=10, outdir_suffix='n'):
+        """Use the self.df and create the images and store them"""
+    
+        n_samples = len(self.df)
+        print("Generating n={} toybrain images".format(n_samples))
+        
+        # (1) create the output folders
+        # add sample size to output dir name and create the folders
+        if outdir_suffix[0]=='n': 
+            outdir_suffix = outdir_suffix.replace('n',f"n{n_samples}", 1)
+            
+        self.OUT_DIR_SUF = f"{self.OUT_DIR}_{outdir_suffix}"
+        # delete previous folder if they already exist
+        shutil.rmtree(self.OUT_DIR_SUF, ignore_errors=True)
+        os.makedirs(f"{self.OUT_DIR_SUF}/images", exist_ok=True)
+        # os.makedirs(f"{self.OUT_DIR}/masks", exist_ok=True)
+        
+        # (2) save the dataframe in the folder
+        self.df.to_csv(f"{self.OUT_DIR_SUF}/toybrains_{outdir_suffix}.csv")
+        # (3) Generate and save images 
+        Parallel(n_jobs=n_jobs)(
+                            delayed(
+                                self._gen_image)(subidx) 
+                                    for subidx in tqdm(range(n_samples)))
+            
+            
+    def _gen_image(self, df_idx):
+        subject = self.df.iloc[df_idx]
+        genvars = {}
+        for key,val in subject.items():
+            if 'gen_' in key:
+                # remove the prefixes
+                key = key.split('gen_')[1] 
+                # convert to int for ImageDraw package
+                if isinstance(val, float): val = int(val)
+                genvars.update({key: val})
+                
+        # Create a new image of size 64x64 with a black background and a draw object on it
+        image = Image.new('RGB',(self.I,self.I),(0,0,0))
+        draw = ImageDraw.Draw(image)
+        # Draw the brain 
+        # (a) Draw an outer ellipse of the image
+        x0,y0 = (self.ctr[0]-genvars['brain-vol_radminor'],
+                 self.ctr[1]-genvars['brain-vol_radmajor'])
+        x1,y1 = (self.ctr[0]+genvars['brain-vol_radminor']-1,
+                 self.ctr[1]+genvars['brain-vol_radmajor']-1)
+
+        draw.ellipse((x0,y0,x1,y1), 
+                     fill=self.get_color_val(genvars['brain-int_fill']), 
+                     width=genvars['brain_thick'],
+                     outline=self.get_color_val(genvars['brain-int_border'])
+                    )
+        # create the brain mask
+        # brain_mask = (np.array(image).sum(axis=-1) > 0) #TODO save it?
+
+        # (b) Draw ventricles as 2 touching arcs 
+        xy_l = (self.I*.3, self.I*.3, self.I*.5, self.I*.5)
+        xy_r = (self.I*.5, self.I*.3, self.I*.7, self.I*.5)
+        draw.arc(xy_l, start=+310, end=+90, 
+                 fill=self.get_color_val(genvars['brain-int_border']), 
+                 width=genvars['vent_thick'])
+        draw.arc(xy_r, start=-290, end=-110, 
+                 fill=self.get_color_val(genvars['brain-int_border']), 
+                 width=genvars['vent_thick'])
+
+        # (c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
+        # with different size, color and rotations
+        for shape_pos, (x,y) in self.SHAPE_POS.items():
+
+            draw.regular_polygon((x,y,genvars[f'{shape_pos}_vol-rad']), 
+                                 n_sides=genvars[f'{shape_pos}_curv'], 
+                                 rotation=np.random.randint(0,360),
+                                 fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
+                                 outline=self.get_color_val(genvars['brain-int_border']))
+        # (d) save the image
+        image.save(f"{self.OUT_DIR_SUF}/images/{subject.name}.jpg")
         
     
-    def generate_dataset(self, n_samples):
+    def generate_dataset(self, n_samples, n_jobs=10, outdir_suffix='n'):
         """Creates toy dataset and save to disk."""
         # first generate dataset table and update self.df
         self.generate_dataset_table(n_samples)
-        ## TODO parallize data gen
-        # result = Parallel(n_jobs=self.njobs)(delayed(self._gen_image)(subID) for subID in tqdm(range(n_samples)))
-        for subID in tqdm(range(n_samples)):
+        self.generate_dataset_images(n_jobs=n_jobs, 
+                                     outdir_suffix=outdir_suffix)
             
-            # Create a new image of size 64x64 with a black background and a draw object on it
-            image = Image.new('RGB',(self.I,self.I),(0,0,0))
-            draw = ImageDraw.Draw(image)
-            # Draw the brain 
-            # (a) Draw an outer ellipse of the image
-            x0,y0 = (self.ctr[0]-genvars['brain-vol_radminor'],
-                     self.ctr[1]-genvars['brain-vol_radmajor'])
-            x1,y1 = (self.ctr[0]+genvars['brain-vol_radminor']-1,
-                     self.ctr[1]+genvars['brain-vol_radmajor']-1)
-
-            draw.ellipse((x0,y0,x1,y1), 
-                         fill=self.get_color_val(genvars['brain-int_fill']), 
-                         width=genvars['brain_thick'],
-                         outline=self.get_color_val(genvars['brain-int_border'])
-                        )
-            # save the brain mask
-            brain_mask = (np.array(image).sum(axis=-1) > 0) #TODO save it
-
-            # (b) Draw ventricles as 2 touching arcs 
-            xy_l = (self.I*.3, self.I*.3, self.I*.5, self.I*.5)
-            xy_r = (self.I*.5, self.I*.3, self.I*.7, self.I*.5)
-            draw.arc(xy_l, start=+310, end=+90, 
-                     fill=self.get_color_val(genvars['brain-int_border']), 
-                     width=genvars['vent_thick'])
-            draw.arc(xy_r, start=-290, end=-110, 
-                     fill=self.get_color_val(genvars['brain-int_border']), 
-                     width=genvars['vent_thick'])
-
-            # (c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
-            # with different size, color and rotations
-            for shape_pos, (x,y) in self.SHAPE_POS.items():
-                
-                draw.regular_polygon((x,y,genvars[f'{shape_pos}_vol-rad']), 
-                                     n_sides=genvars[f'{shape_pos}_curv'], 
-                                     rotation=np.random.randint(0,360),
-                                     fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
-                                     outline=self.get_color_val(genvars['brain-int_border']))
-            # (d) save the image
-            image.save(f"{self.IMGS_DIR}{subID:05}.jpg")
             
-        
-        
     def get_color_val(self, color):
         if isinstance(color, str):
             # if there is a number tag on the color then remove it
@@ -383,7 +405,6 @@ class ToyBrainsData:
             display(dot)
         
         if show_attr_probas:
-            
             # cov_cols, attr_cols = zip(*edges)
             attr_cols = sorted(list(self.GENVARS.keys()))
             cov_cols = sorted(list(self.COVARS.keys()))
@@ -392,8 +413,8 @@ class ToyBrainsData:
             fs=12
              # create figure
             f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                                  figsize=(2+2*subplot_ncols, 2*subplot_nrows),
-                                  sharex="col", sharey="row", constrained_layout=True)
+                                  figsize=(3+1.5*subplot_ncols, 1.5*subplot_nrows),
+                                  sharex="col", sharey="row")
             f.suptitle("Image attribute generation probabilities (cols) set for different covariates or labels (rows)", 
                        fontsize=fs+6)
             
@@ -439,20 +460,27 @@ class ToyBrainsData:
                                      hue=cov_name, 
                                      x=attr_name, y=f"{attr_name}_probas",  
                                      ax=ax, legend=(j==0))
+                    
                     if j==0: 
-                        sns.move_legend(g, loc="upper left", bbox_to_anchor=(-0.9,1.), 
-                                        frameon=True, title_fontproperties={'size':fs}) #, alignment='center', 'weight':'heavy'
+                        # make 2 cols if there are many lagend labels
+                        ncol=2 if len(ax.legend_.legendHandles)>3 else 1
+                        sns.move_legend(g, loc="upper left", 
+                                        bbox_to_anchor=(-1.5,1.), ncol=ncol,
+                                        frameon=True, 
+                                        title_fontproperties={'size':fs, 
+                                                              'weight':'heavy'}) #
                     # # set xlabel and ylabel at the top and leftside of the plots resp.
-                    ax.set_ylabel(cov_name, fontsize=fs) if j==0 else ax.set_ylabel(None)
+                    ax.set_ylabel(None)
                     # # shorten the xtick labels if it is too long
                     ticklabels = ax.get_xticklabels()
-                    if i==0: ax.set_title(attr_name)
+                    if i==0: ax.set_title(attr_name, fontsize=fs+2)
                     if len(ticklabels)>0 and len(ticklabels[0].get_text())>6:
                         for k, lbl in enumerate(ticklabels):
                             if len(lbl.get_text())>4: 
                                 ticklabels[k].set_text(lbl.get_text()[:4])
                         ax.set_xticks(ax.get_xticks(), labels=ticklabels) #, fontsize=fs-4)
             plt.ylim([0,1]) # probability
+            plt.tight_layout()
             plt.show()
         
         
@@ -524,10 +552,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--n_samples', default=100, type=int)
-    parser.add_argument('--dir', default='toybrains', type=str)
+    parser.add_argument('--dir', default='dataset/toybrains', type=str)
     parser.add_argument('-c', default = 'configs.lbl5cov3_base', type=str)
     parser.add_argument('--config_tweak', default = None, type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
+    parser.add_argument('--n_jobs', default=10, type=int)
+    parser.add_argument('--suffix', default = 'n', type=str)
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
     
@@ -540,4 +570,7 @@ if __name__ == "__main__":
                             img_size=IMG_SIZE, debug=args.debug, 
                             seed=RANDOM_SEED)   
     # create the shapes dataset
-    dataset.generate_dataset(n_samples=args.n_samples)
+    dataset.generate_dataset(n_samples=args.n_samples, 
+                             n_jobs=args.n_jobs, 
+                             outdir_suffix=args.suffix,
+                            )

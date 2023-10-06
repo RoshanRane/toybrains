@@ -119,10 +119,10 @@ def plot_col_counts(df, title=''):
 def plot_col_dists(df, attr_cols, cov_cols, title=''):
     
     df = df.copy()
-    attr_cols = sorted(attr_cols)
     cov_cols = sorted(cov_cols)
-    subplot_nrows = len(attr_cols)
-    subplot_ncols = len(cov_cols)
+    attr_cols = sorted(attr_cols)
+    subplot_nrows = len(cov_cols)
+    subplot_ncols = len(attr_cols)
     fs=12
     # convert all columns to numerical
     for col in attr_cols:
@@ -137,25 +137,29 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
     
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(2+2*subplot_ncols, 2*subplot_nrows),
-                          sharex='row', sharey='row', constrained_layout=True, 
-                          )
+                          figsize=(2+1.5*subplot_ncols, 1.5*subplot_nrows),
+                          sharex="col", sharey="col")
+    if title: f.suptitle(title, fontsize=fs+4)
     
     for i, axis_row in enumerate(axes):
         for j, ax in enumerate(axis_row):
-            attr, cov = attr_cols[i], cov_cols[j]
-            g = sns.kdeplot(df, x=attr, hue=cov, ax=ax, fill=True, legend=(i==0))
-            if i==0: 
-                sns.move_legend(g, "upper center", bbox_to_anchor=(0.5,1.5), 
-                                alignment='center', ncols=2,
-                                title_fontproperties={'size':fs}) #, 'weight':'heavy'
+            cov, attr = cov_cols[i], attr_cols[j]
+            g = sns.kdeplot(df, x=attr, hue=cov, ax=ax, fill=True, legend=(j==0))
+            if j==0: 
+                # make 2 cols if there are many lagend labels
+                ncol=2 if len(ax.legend_.legendHandles)>3 else 1
+                sns.move_legend(g, loc="upper left", 
+                                bbox_to_anchor=(-1.5,1.), ncol=ncol,
+                                frameon=True, 
+                                title_fontproperties={'size':fs, 
+                                                      'weight':'heavy'})
             # set xlabel and ylabel at the top and leftside of the plots resp.
-            ax.set_ylabel(attr, fontsize=fs) if j==0 else ax.set_ylabel(None)
-            ax.set_xlabel(None)
-            # if i==0: ax.set_title(f"covariate = {cov.replace('cov_','')}")
-        
-    if title: f.suptitle(title, fontsize=fs+4)
-    f.supylabel("Density")
-    f.supylabel("Covariates / labels")
+            ax.set_ylabel(None)
+            ax.set_xlabel(attr.replace('gen_',''), fontsize=fs) if i==len(axes)-1 else ax.set_xlabel(None)
+            # turn off the density ticks
+            ax.set_yticklabels([])
+            if i==0: ax.set_title(attr.replace('gen_',''), fontsize=fs)
+            
+    f.supylabel("Covariates & labels", fontsize=fs+2)
     
-    # plt.tight_layout()
+    plt.tight_layout()
