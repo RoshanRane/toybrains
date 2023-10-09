@@ -11,12 +11,11 @@ from sklearn.metrics import accuracy_score
 
 # helper
 
-def _get_data(df, label, data_type='a'):
-    '''
-    get tabula data using data_type criteria
-    '''
+def _get_data(df, label, data_type='attr'):
+    '''get tabula data using data_type criteria'''
     
-    assert data_type in ['a', 'c+a', 'c', 'a+c'], "data type should be either a, or c+a, or a+c"
+    assert data_type in ['attr',  'cov', 'attr+cov', 'cov+attr'], \
+"data type should be one of ['attr',  'cov', 'attr+cov', 'cov+attr']"
     assert label in df.columns, f"label {label} should be in dataframe"
     
     DF = df.copy()
@@ -26,10 +25,10 @@ def _get_data(df, label, data_type='a'):
     
     # set the data using data_type
     columns = []
-    if 'a' in data_type:
+    if 'attr' in data_type:
         new_columns = DF.columns[DF.columns.str.startswith('gen')].tolist()
         columns += new_columns
-    if 'c' in data_type:
+    if 'cov' in data_type:
         new_columns = DF.columns[DF.columns.str.startswith('cov')].tolist()
         columns += new_columns
         if label in columns: columns.remove(label)
@@ -39,8 +38,42 @@ def _get_data(df, label, data_type='a'):
     return data, target
 
 # function
-
-def get_table_loader(dataset, label, data_type='a', random_seed=42):
+# deviance function
+def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
+                       returnloglikes=False):
+    """Computes explained_deviance score to be comparable to explained_variance"""
+    
+    assert y_pred_logits is not None or y_pred_probas is not None, "Either the predicted probabilities \
+(y_pred_probas) or the predicted logit values (y_pred_logits) should be provided. But neither of the two were provided."
+    
+    if y_pred_logits is not None and y_pred_probas is None:
+        # check if binary or multiclass classification
+        if y_pred_logits.ndim == 1: 
+            y_pred_probas = expit(y_pred_logits)
+        elif y_pred_logits.ndim == 2: 
+            y_pred_probas = softmax(y_pred_logits)
+        else: # invalid
+            raise ValueError(f"logits passed seem to have incorrect shape of {y_pred_logits.shape}")
+            
+    if y_pred_probas.ndim == 1: y_pred_probas = np.stack([1-y_pred_probas, y_pred_probas], axis=-1)
+    
+    # compute a null model's predicted probability
+    X_dummy = np.zeros(len(y_true))
+    y_null_probas = DummyClassifier(strategy='prior').fit(X_dummy,y_true).predict_proba(X_dummy)
+    #strategy : {"most_frequent", "prior", "stratified", "uniform",  "constant"}
+    # suggestion from https://stackoverflow.com/a/53215317
+    llf = -log_loss(y_true, y_pred_probas, normalize=False)
+    llnull = -log_loss(y_true, y_null_probas, normalize=False)
+    ### McFadden’s pseudo-R-squared: 1 - (llf / llnull)
+    explained_deviance = 1 - (llf / llnull)
+    ## Cox & Snell’s pseudo-R-squared: 1 - exp((llnull - llf)*(2/nobs))
+    # explained_deviance = 1 - np.exp((llnull - llf) * (2 / len(y_pred_probas))) ## TODO, not implemented
+    if returnloglikes:
+        return explained_deviance, {'loglike_model':llf, 'loglike_null':llnull}
+    else:
+        return explained_deviance
+    
+def get_table_loader(dataset, label, data_type='attr', random_seed=42):
     '''
     get structural data return to data
     
@@ -49,8 +82,8 @@ def get_table_loader(dataset, label, data_type='a', random_seed=42):
     dataset : tuple
         tuple of (DF_train, DF_val, DF_test)
         
-    data_type : string, defuault : a
-        select the input type either a, c, or a+c, or c+a
+    data_type : string, defuault : attr
+        select the input type either 'attr',  'cov', 'attr+cov', 'cov+attr'
     
     seed : integer, default : 42
         random seed
@@ -75,11 +108,9 @@ def run_lreg(data):
     continuous_preprocessor = StandardScaler()
     
     # select continuous columns
-    
     continuous_columns = continuous_columns_selector(data_train)
     
     # select categorical columns
-    
     categorical_columns = categorical_columns_selector(data_train)
     
     preprocessor = ColumnTransformer(
@@ -92,47 +123,46 @@ def run_lreg(data):
     # TODO Refactoring needed
     
     num = len(set(target_train))
-    
-    if num == 2:
-        pipe = make_pipeline(preprocessor, LogisticRegression(max_iter=1000, random_state=42))
+    # binary labels
+    if num == 2: 
+        model_name = 'logistic_regression'
+        pipe = make_pipeline(preprocessor, 
+                             LogisticRegression(max_iter=1000, random_state=42))
         parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
+        scoring = "balanced_accuracy"
     
-    if num == 4:
-        pipe = make_pipeline(preprocessor, LogisticRegression(max_iter=1000, random_state=42, multi_class='multinomial', solver='lbfgs'))
+    # multiclass labels
+    elif num < 5:
+        model_name = 'multinomial_logistic_regression'
+        pipe = make_pipeline(preprocessor, 
+                             LogisticRegression(max_iter=1000, random_state=42, 
+                                                multi_class='multinomial', solver='lbfgs'))
         parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
-    
-    if num > 4:
-        pipe = make_pipeline(preprocessor, LinearRegression())
+        scoring = "balanced_accuracy"
+        
+    # regression label
+    else:
+        model_name = 'linear_regression'
+        pipe = make_pipeline(preprocessor, 
+                             LinearRegression())
         parameters = {'linearregression__fit_intercept': [True, False]}
+        scoring = "r2"
     
     # Use GridSearchCV to find the optimal hyperparameters for the pipeline
-    
-    clf = GridSearchCV(pipe, param_grid=parameters)
+    clf = GridSearchCV(pipe, param_grid=parameters, scoring=scoring)
     
     # Train and fit logistic regression model
-
     clf.fit(data_train, target_train)
     
     # Predict using the trained model
-
-    # y_pred = clf.predict(data_val)
-
-    # Calculate accuracy
-    
-    # accuracy = accuracy_score(target_val, y_pred)
-    
-    # Calculate accuracy
-    
-    # (TODO) Metric needed
-    # depeneds on situation provide more as dictionary style!
-    # using num info.
-    
     tr_acc = clf.score(data_train, target_train)
     vl_acc = clf.score(data_val, target_val)
     te_acc = clf.score(data_test, target_test)
     
-    # print(f"Train Accuracy: {tr_acc:>8.4f} "
-    #       f"Validation Accuracy: {vl_acc:>8.4f} "
-    #       f"Test Accuracy: {te_acc:>8.4f}")
+    results = {"train_metric":tr_acc, "val_metric":vl_acc, "test_metric":te_acc}
     
-    return (tr_acc, vl_acc, te_acc), (num, pipe)
+    return results, model_name, scoring, pipe
+
+
+
+
