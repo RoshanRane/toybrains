@@ -7,7 +7,11 @@ from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import make_scorer, r2_score
+import numpy as np
+from scipy.special import softmax, expit
+from sklearn.metrics import log_loss
+from sklearn.dummy import DummyClassifier
 
 # helper
 
@@ -37,8 +41,7 @@ def _get_data(df, label, data_type='attr'):
     
     return data, target
 
-# function
-# deviance function
+# explained deviance function from https://github.com/RoshanRane/Deviance_explained/blob/main/deviance.py
 def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
                        returnloglikes=False):
     """Computes explained_deviance score to be comparable to explained_variance"""
@@ -72,7 +75,12 @@ def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None,
         return explained_deviance, {'loglike_model':llf, 'loglike_null':llnull}
     else:
         return explained_deviance
-    
+
+
+def d2_metric(y, y_pred):
+    return explained_deviance(y_true=y,y_pred_probas=y_pred)
+
+
 def get_table_loader(dataset, label, data_type='attr', random_seed=42):
     '''
     get structural data return to data
@@ -96,6 +104,7 @@ def get_table_loader(dataset, label, data_type='attr', random_seed=42):
     data_test, target_test = _get_data(df=DF_test, label=label, data_type=data_type)
     
     return (data_train, target_train, data_val, target_val, data_test, target_test)
+
 
 def run_lreg(data):
 
@@ -121,7 +130,6 @@ def run_lreg(data):
     )
     
     # TODO Refactoring needed
-    
     num = len(set(target_train))
     # binary labels
     if num == 2: 
@@ -129,16 +137,20 @@ def run_lreg(data):
         pipe = make_pipeline(preprocessor, 
                              LogisticRegression(max_iter=1000, random_state=42))
         parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
-        scoring = "balanced_accuracy"
+        metric_name = "r2-pseudo"
+        metric = make_scorer(d2_metric, needs_proba=True)
+        
     
     # multiclass labels
     elif num < 5:
-        model_name = 'multinomial_logistic_regression'
+        model_name = 'multinomial_logistic_regression' 
         pipe = make_pipeline(preprocessor, 
                              LogisticRegression(max_iter=1000, random_state=42, 
-                                                multi_class='multinomial', solver='lbfgs'))
+                                                multi_class='multinomial', 
+                                                solver='lbfgs'))
         parameters = {'logisticregression__C': [0.1, 1, 10, 100]}
-        scoring = "balanced_accuracy"
+        metric_name = "r2-pseudo"
+        metric = make_scorer(d2_metric, needs_proba=True)
         
     # regression label
     else:
@@ -146,10 +158,10 @@ def run_lreg(data):
         pipe = make_pipeline(preprocessor, 
                              LinearRegression())
         parameters = {'linearregression__fit_intercept': [True, False]}
-        scoring = "r2"
+        metric_name = metric = "r2" 
     
     # Use GridSearchCV to find the optimal hyperparameters for the pipeline
-    clf = GridSearchCV(pipe, param_grid=parameters, scoring=scoring)
+    clf = GridSearchCV(pipe, param_grid=parameters, scoring=metric)
     
     # Train and fit logistic regression model
     clf.fit(data_train, target_train)
@@ -160,8 +172,8 @@ def run_lreg(data):
     te_acc = clf.score(data_test, target_test)
     
     results = {"train_metric":tr_acc, "val_metric":vl_acc, "test_metric":te_acc}
-    
-    return results, model_name, scoring, pipe
+    settings = {"model":model_name, "metric":metric_name, "model_config":pipe}
+    return results, settings
 
 
 

@@ -662,7 +662,7 @@ class ToyBrainsData:
         CV, results_out_dir,
         random_seed, debug, results_kwargs):
         '''
-        run one baesline: label X feature X trial
+        run one baseline: label X feature X trial
         ''' 
         # split the dataset for training, validation, and test from raw dataset
         dataset = generate_dataset(df_csv_path, label, CV, trial, random_seed, debug)
@@ -672,7 +672,7 @@ class ToyBrainsData:
         if debug: print(f'Inputs: {data[0].columns}')
 
         # run logistic regression and linear regression for tabular dataset
-        results_dict, model_name, metric, modelpipe = run_lreg(data)
+        results_dict, model_config = run_lreg(data)
 
         if debug:
             print(f"Train metric: {results_dict['train_metric']:>8.4f} "
@@ -683,16 +683,14 @@ class ToyBrainsData:
             "inp" : feature,
             "out" : label,
             "trial" : trial,
-            "model" : model_name,
-            "metric": metric,
             **results_dict,
-            "model_config" : modelpipe,
+            **model_config
         }
 
         result.update(results_kwargs)
         df = pd.DataFrame([result])
         
-        df.to_csv(f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature}_{trial}-of-{CV}_{model_name}.csv", 
+        df.to_csv(f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature}_{trial}-of-{CV}_{model_config['model']}.csv", 
                   index=False)
         
 
@@ -733,11 +731,9 @@ class ToyBrainsData:
             palette = sns.color_palette()
             dodge, scale, errwidth, capsize = 0.4, 0.4, 0.9, 0.08
 
-            ax = sns.pointplot(y=y, x=x, 
-                               hue=hue, hue_order=hue_order,
-                               join=join, data=dfn, ax=ax,
-                               errorbar='sd', errwidth=errwidth, capsize=capsize,
-                               dodge=dodge, scale=scale, palette=palette)
+            ax = sns.barplot(y=y, x=x,  data=dfn, ax=ax,
+                            hue=hue, hue_order=hue_order,
+                            errorbar='sd')
 
             ax.legend_.remove()
             ax.set_title(f"{dataset}")
@@ -745,7 +741,7 @@ class ToyBrainsData:
             ax.set_ylabel("")
 
             # draw the chance line in the legend
-            ax.axvline(x=0.5, label="chance", c='gray', ls='--', lw=1.5)
+            # ax.axvline(x=0.0, label="chance", c='gray', ls='--', lw=1.5)
 
         # set custom x-axis tick positions and labels
         x_tick_positions = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
@@ -759,16 +755,16 @@ class ToyBrainsData:
             ax.set_xlabel("")
 
         # add labels for the last subplot
-        axes[-1].set_xlabel(f"{x} - Accuracy (%)")
+        axes[-1].set_xlabel(f"{x} - R2 or Pseudo-R2 (%)")
 
-        legend_handles = []
-
-        legend_labels = ["Attributes (A)", "Covariates (C)", "A+C"]
-        for i, label in enumerate(legend_labels):
-            legend_handles.append(plt.Line2D([0], [0], marker='', linestyle='-', color=palette[i], label=label))
+        handles,labels = ax.get_legend_handles_labels()
+        legend_label_map = {'attr':"Attributes", 'cov':"Covariates", 'attr+cov':"Attributes + Covariates"}
+        labels = [legend_label_map[l] for l in labels]
+        # for i, label in enumerate(legend_labels):
+        #     legend_handles.append(plt.Line2D([0], [0], marker='', linestyle='-', color=palette[i], label=label))
 
         # add the legend outside the subplots
-        plt.legend(handles=legend_handles, loc='upper right', title='Inputs', fontsize=7, bbox_to_anchor=(1.0, 0.4))
+        ax.legend(handles, labels, loc='upper right', title='Inputs', fontsize=7, bbox_to_anchor=(1.0, 0.4))
 
         plt.suptitle("Baseline Analysis Plot")
         plt.tight_layout()
