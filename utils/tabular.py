@@ -15,31 +15,7 @@ from sklearn.dummy import DummyClassifier
 
 # helper
 
-def _get_data(df, label, data_type='attr'):
-    '''get tabula data using data_type criteria'''
-    
-    assert data_type in ['attr',  'cov', 'attr+cov', 'cov+attr'], \
-"data type should be one of ['attr',  'cov', 'attr+cov', 'cov+attr']"
-    assert label in df.columns, f"label {label} should be in dataframe"
-    
-    DF = df.copy()
-    
-    # set the target label
-    target = list(DF['label'])
-    
-    # set the data using data_type
-    columns = []
-    if 'attr' in data_type:
-        new_columns = DF.columns[DF.columns.str.startswith('gen')].tolist()
-        columns += new_columns
-    if 'cov' in data_type:
-        new_columns = DF.columns[DF.columns.str.startswith('cov')].tolist()
-        columns += new_columns
-        if label in columns: columns.remove(label)
-    
-    data = DF[columns]
-    
-    return data, target
+
 
 # explained deviance function from https://github.com/RoshanRane/Deviance_explained/blob/main/deviance.py
 def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
@@ -81,34 +57,9 @@ def d2_metric(y, y_pred):
     return explained_deviance(y_true=y,y_pred_probas=y_pred)
 
 
-def get_table_loader(dataset, label, data_type='attr', random_seed=42):
-    '''
-    get structural data return to data
-    
-    PARAMETER
-    ---------
-    dataset : tuple
-        tuple of (DF_train, DF_val, DF_test)
-        
-    data_type : string, defuault : attr
-        select the input type either 'attr',  'cov', 'attr+cov', 'cov+attr'
-    
-    seed : integer, default : 42
-        random seed
-    '''
-    
-    DF_train, DF_val, DF_test = dataset
-    
-    data_train, target_train = _get_data(df=DF_train, label=label, data_type=data_type)
-    data_val, target_val = _get_data(df=DF_val, label=label, data_type=data_type)
-    data_test, target_test = _get_data(df=DF_test, label=label, data_type=data_type)
-    
-    return (data_train, target_train, data_val, target_val, data_test, target_test)
-
-
 def run_lreg(data):
 
-    (data_train, target_train, data_val, target_val, data_test, target_test) = data
+    (data_train, target_train), (data_val, target_val), (data_test, target_test) = data
     
     categorical_columns_selector = selector(dtype_include=object)
     continuous_columns_selector = selector(dtype_exclude=object)

@@ -4,7 +4,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 
 # function
 
-def generate_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=False):
+def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=False):
     '''
     generate the dataset
     
@@ -37,7 +37,7 @@ def generate_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debu
     # load the raw csv
     DF = pd.read_csv(raw_csv_path)
     
-    # assign target label
+    # assign target label #TODO hardcoded - refactor
     if 'cov_age' == label:
         DF['label'] = DF['cov_age']
     else:
@@ -78,7 +78,7 @@ def generate_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debu
     
     # print the number of rows in each dataframe
     if debug:
-        print(f"Raw:   {len(DF)}\n"
+        print(f"Full dataset:   {len(DF)}\n"
               f"Train:  {len(DF_train)}\n"
               f"Val:    {len(DF_val)}\n"
               f"Test:   {len(DF_test)}")

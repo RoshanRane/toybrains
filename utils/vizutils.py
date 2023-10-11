@@ -11,7 +11,7 @@ from tqdm.notebook import tqdm
 import random
 import math
 import json
-import matplotlib as mpl
+import matplotlib
 from  matplotlib.ticker import FuncFormatter
 from matplotlib.colors import is_color_like
 from colordict import ColorDict, rgb_to_hex
@@ -24,7 +24,7 @@ should either me a string path to the image files or numpy arrays"
     f, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols,n_rows), 
                            sharex=True, sharey=True)
     # f.suptitle("Toy brains dataset:")
-    axes = axes.ravel()
+    axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
 
     for i, img in enumerate(img_files):
         if i<len(axes):
@@ -73,7 +73,7 @@ def plot_col_counts(df, title=''):
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
                           figsize=(4*subplot_ncols,3*subplot_nrows))
-    axes = axes.ravel()
+    axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
     if title: f.suptitle(title, fontsize=16)
     f.supylabel("Count")
 
@@ -92,7 +92,7 @@ def plot_col_counts(df, title=''):
                 colormap = ColorDict()
                 colors = [rgb_to_hex(colormap[c.split('-')[-1]]) for c in df_copy[col].sort_values().unique().tolist()]
 
-                sns.countplot(data=df_copy, x=col, ax=ax, palette=colors,
+                sns.countplot(data=df_copy, x=col, ax=ax, 
                              order=df_copy[col].sort_values().unique())
             else:
                 sns.countplot(data=df_copy, x=col, ax=ax)
@@ -100,6 +100,7 @@ def plot_col_counts(df, title=''):
             if 'int' in df_copy[col].dtype.name:
                 ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: int(x)))
             elif isinstance(df_copy[col].iloc[0], str):
+                ax.set_xticks(ax.get_xticks())
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
                 
         elif plottype == 'hist':
