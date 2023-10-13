@@ -21,7 +21,7 @@ from tabulate import tabulate
 
 # add custom imports
 from utils.dataset import split_dataset
-from utils.tabular import run_lreg
+from utils.baseline import run_lreg
 
 # sys.path.insert(0, "../")
 # sns.set_theme(style="ticks", palette="pastel")
@@ -138,6 +138,17 @@ class ToyBrainsData:
                         
                 
         self.RULES_COV_TO_GEN = config.RULES_COV_TO_GEN
+        # compute the nodes and edges of the configuration for forming a Causal Graphical Model
+        nodes, edges = set(), set()
+        for c, c_states in self.RULES_COV_TO_GEN.items():
+            nodes.add(c)
+            for _, ats in c_states.items():
+                for at in ats.keys():
+                    nodes.add(at)
+                    edges.add((c,at))
+                    
+        self.CGM_nodes = sorted(list(nodes))
+        self.CGM_edges = sorted(list(edges))    
             
         self._init_df()
         # store a dict of results tables (run.csv) on the dataset
@@ -163,6 +174,9 @@ class ToyBrainsData:
             data.append([var_name, str(var.states),  str(var.weights)])
         print (tabulate(data, headers=["Name", "States", "Weights"]))
                 
+    def get_config_causal_graph(self): 
+        return CausalGraphicalModel(nodes=self.CGM_nodes, 
+                                    edges=self.CGM_edges)
 
     def show_current_config(self, 
                             show_dag_probas=True, 
@@ -172,27 +186,14 @@ class ToyBrainsData:
                                   image attributes change for each covariate/label state. This feature
                                    is used to verify that all the intended weight changes were applied.
         """
-        # compute the nodes and edges of the Causal Graphical Model
-        nodes, edges = set(), set()
-        for c, c_states in self.RULES_COV_TO_GEN.items():
-            nodes.add(c)
-            for _, ats in c_states.items():
-                for at in ats.keys():
-                    nodes.add(at)
-                    edges.add((c,at))
-                    
-        nodes = sorted(list(nodes))
-        edges = sorted(list(edges))
+
         
         # draw return a graphviz `dot` object, which jupyter can render
-        dot = self.draw_dag(edges)
-        display(dot)
-        
         if show_dag_probas:
             
             # convert to one-to-many dict of source node to destination nodes
             src_to_dst_map = {}
-            for src, dst in edges:
+            for src, dst in self.CGM_edges:
                 if src not in src_to_dst_map: # create a new entry
                     src_to_dst_map.update({src:[dst]})
                 else: # append to list of dst nodes
@@ -285,20 +286,14 @@ class ToyBrainsData:
                 plt.tight_layout()
                 plt.show()
         
-        
-        if return_causal_graph:
-            return CausalGraphicalModel(nodes=nodes, edges=edges)
-        else:
-            return nodes, edges
+        return self.draw_dag()
     
     
-    def draw_dag(self, edges):
-            """
-            dot file representation of the CGM.
-            """
+    def draw_dag(self):
+            """dot file representation of the Causal Graphical Model (CGM)."""
             dot = graphviz.Digraph(graph_attr={'rankdir': ''})
             # separate out the source nodes from the destination nodes
-            src_nodes, dst_nodes = zip(*edges)
+            src_nodes, dst_nodes = zip(*self.CGM_edges)
             src_nodes = sorted(list(set(src_nodes)))
             dst_nodes = sorted(list(set(dst_nodes)))
             # middle nodes will be in both src_nodes and dst_nodes. 
@@ -335,7 +330,6 @@ class ToyBrainsData:
                 color_hex = f'#{r:x}{g:x}{b:x}{alpha:x}'
                 
                 settings = {"shape": "ellipse", "group":grp, 
-                            "tooltip":grp, "image":"test.png",
                             "style":"filled", "fillcolor": get_color_hex(grp), 
                             } 
                 
@@ -347,7 +341,7 @@ class ToyBrainsData:
                             if node.split("_")[0] == grp:
                                 dot_c.node(node, "_".join(node.split("_")[1:]), **settings)
                 
-            for a, b in edges:
+            for a, b in self.CGM_edges:
                 # set the arrow color same as the color of the attrib variable
                 grp = b.split("_")[0]
                 dot.edge(a, b, _attributes={"color": get_color_hex(grp, alpha=200), 
@@ -406,13 +400,7 @@ class ToyBrainsData:
     ### INIT METHODS
     def _init_df(self):
         # Initialize a table to store all dataset attributes
-        columns = sorted(list(self.COVARS.keys()))
-        for name,_ in self.GENVARS.items(): 
-            if '-rad' in name:
-                columns.append('_gen_' + name)
-            else:
-                columns.append('gen_' + name)
-                
+        columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))                
         self.df =  pd.DataFrame(columns=columns)
         self.df.index.name = "subjectID"   
             
@@ -513,15 +501,11 @@ class ToyBrainsData:
                     self.area_of_regular_polygon(
                         n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
                 
-            # (3) store the covars and then the generative attributes with a prefix 'gen_'
+            # (3) store the covars and then the generative attributes
             for k,v in covars.items():
                 self.df.at[f'{subID:05}', k] = v
-            # store the generative properties with a prefix 'gen_'
             for k,v in genvars.items():
-                if '-rad' in k: # radius is stored as a secondary gen variable 
-                    self.df.at[f'{subID:05}', '_gen_'+k] = v
-                else:
-                    self.df.at[f'{subID:05}', 'gen_'+k] = v
+                self.df.at[f'{subID:05}', k] = v
         
         # create the output folder and save the table
         # add sample size to output dir name and create the folders
@@ -557,9 +541,7 @@ class ToyBrainsData:
         subject = self.df.iloc[df_idx]
         genvars = {}
         for key,val in subject.items():
-            if 'gen_' in key:
-                # remove the prefixes
-                key = key.split('gen_')[1] 
+            if key[:4] not in ['lbl_','cov_']:
                 # convert to int for ImageDraw package
                 if isinstance(val, float): val = int(val)
                 genvars.update({key: val})
@@ -632,23 +614,22 @@ class ToyBrainsData:
         return area
 
 ##########################################  methods for baseline models fit  #############################################
-
+    
     # run baseline on both attributes and covariates
     def fit_baseline_models(self,
-                            CV=10, n_jobs=10, 
-                            random_seed=42, debug=False):
-        ''' run linear regression or logistic regression to estimate the expected prediction performance
-        for a given dataset. 
-        Fits [input features] X [output labels] X [cross validation] models where,
-            input features can be either:
-                i) image attributes (attr), 
-                ii) other covariates in the dataset (cov)
-                iii) image attributes and other covariates together (attr+cov)
-            output labels are all covariates in the dataset
-            model can be:
-                i) logistic regression if binary label
-                ii) multiple logistic regression if multiclass label 
-                iii) linear regression if continuous label
+                            input_feature_types=["attr_subsets", "cov_subsets"],
+                            CV=5, n_jobs=10, 
+                            random_seed=None, debug=False):
+        ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
+Fits [input features] X [output labels] X [model x cross validation folds] models where,
+    [input features] can be either:
+            i) attr_subsets: all image attributes are fed as input and then several subsets of attributes are created using the current causal graph (config file) and fed as input.
+            ii) cov_subsets: All other covariates are used as input features and then each subsets of covariates are created using the current causal graph (config file) and fed as input.
+    [output labels] each of the covariates in the dataset.
+    [model] can be:
+            i) logistic regression if binary label
+            ii) multiple logistic regression if multiclass label 
+            iii) linear regression if continuous label
 
         PARAMETERS
         ----------
@@ -663,32 +644,39 @@ class ToyBrainsData:
         assert len(self.df)>0, "first generate the dataset table using self.generate_dataset_table() method." 
         start_time = datetime.now()
         df_csv_path = glob(f"{self.OUT_DIR_SUF}/toybrains_*.csv")[0]
-        features = ['attr', 'attr+cov', 'cov']
+            
         labels = self.df.filter(regex = '^lbl').columns.tolist() + self.df.filter(regex = '^cov').columns.tolist()
-        n_covs = len(self.df.filter(regex = '^cov').columns)
         # create the directory to store the results
         results_out_dir = f"{self.OUT_DIR_SUF}/baseline_results" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
         os.makedirs(results_out_dir)
-        if debug: n_jobs=1
+        if debug: #simplify
+            n_jobs=1
+            CV=2
+            random_seed=42
         
         for_result_out = {
             "dataset" : self.OUT_DIR_SUF,
             "type" : "baseline",
-            "n_samples" : len(self.df),
-            "CV" : CV,
-        }
-
+            "n_samples" : len(self.df)}
+           
         # generate the different settings of [input features] X [output labels] X [cross validation]
         all_settings = []
         for lbl in labels:
-            for fea in features:
-                # if there are no input features then skip
-                # if there are no covariates in the features when setting is "attr+cov" then skip
-                if not ((lbl.split('_')[0]=='cov') and (n_covs==1) and (fea in ['attr+cov','cov'])):
-                    for cv_i in range(CV):
-                        all_settings.append((lbl,fea,cv_i))
-
+            # get the respective list of input feature columns for each feature_type requested
+            # Also, exclude the label from feature columns list
+            input_features_dict = self._get_feature_cols(input_feature_types, lbl=lbl)
+            for fea_name, fea_cols in input_features_dict.items():
+                # if the label is in features list then remove it
+                if lbl in fea_cols: fea_cols.remove(lbl)
+                # and ensure the new list of features is not empty
+                if len(fea_cols)==0: continue
+                for cv_i in range(CV):
+                    all_settings.append({"trial":cv_i, 
+                                         "label":lbl, 
+                                         "features":fea_cols, 
+                                         "feature_set_name":fea_name})
+        
         print(f'running a total of {len(all_settings)} different settings of \
 [input] x [output] x [CV] and saving result in {self.OUT_DIR_SUF}')
         
@@ -697,13 +685,13 @@ class ToyBrainsData:
             parallel(
                 delayed(
                     self._fit_baseline_model)(
-                        label=label, feature=feature, trial=trial,
+                        **settings,
                         df_csv_path=df_csv_path,
                         CV=CV,
                         results_out_dir=results_out_dir,
                         random_seed=random_seed, debug=debug, 
                         results_kwargs=for_result_out
-                    ) for label, feature, trial in tqdm(all_settings))
+                    ) for settings in tqdm(all_settings))
 
         # merge run_*.csv into one run.csv
         df_out = pd.concat([pd.read_csv(csv) for csv in glob(f"{results_out_dir}/run-bsl_*.csv")], 
@@ -729,13 +717,13 @@ class ToyBrainsData:
     # run one using settings
     def _fit_baseline_model(
         self,
-        label, feature, trial,
+        trial, label, features, 
+        feature_set_name,
         df_csv_path,
         CV, results_out_dir,
         random_seed, debug, results_kwargs):
-        '''
-        run one baseline: label X feature X trial
-        ''' 
+        ''' run one baseline linear model for the given 
+        [label, features] with 'trial' number of cross-validation folds''' 
         data = []
         # split the dataset for training, validation, and test from raw dataset
         for data_split in split_dataset(df_csv_path, label, 
@@ -743,12 +731,13 @@ class ToyBrainsData:
                                         random_seed, 
                                         debug):
             # get the input and output
-            X,y = self._get_X_y(data_split, label=label, data_type=feature)
-            data.append([X,y])
+            X = data_split[features]
+            y = data_split[label].values
+            data.append([X, y])
         # display(data)
-        X = data[0][0].columns.tolist()
+        
         if debug: 
-            print(f'Input features: {X}')
+            print(f'Input features: {data[0][0].columns.tolist()}')
             print(f'Output label  : {label}')
 
         # run logistic regression and linear regression for tabular dataset
@@ -760,7 +749,7 @@ class ToyBrainsData:
                   f"Test metric: {results_dict['test_metric']:>8.4f}")
 
         result = {
-            "inp" : feature,
+            "inp" : feature_set_name, 
             "out" : label,
             "trial" : trial,
             **results_dict,
@@ -770,35 +759,63 @@ class ToyBrainsData:
         
         # save the results as a csv file
         pd.DataFrame([result]).to_csv(
-            f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature}_{trial}-of-{CV}_{model_config['model']}.csv", 
+            f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature_set_name}_{trial}-of-{CV}_{model_config['model']}.csv", 
                   index=False)
-
         
-    def _get_X_y(self, df, label, data_type='attr'):
-        '''get tabular data using data_type criteria'''
 
-        assert data_type in ['attr',  'cov', 'attr+cov', 'cov+attr'], \
-    "data type should be one of ['attr',  'cov', 'attr+cov', 'cov+attr']"
-        assert label in df.columns, f"label {label} should be in dataframe"
+    def _get_feature_cols(self,
+                          feature_types, lbl=''):
+        all_attr_cols = [n for n,_ in self.GENVARS.items()]
+        all_cov_cols  = [n for n,_ in self.COVARS.items()]
+                
+        # create a list all cov to image attribute relations in the CGM
+        attr_subsets = []
+        cov_subsets = []
+        for node in self.CGM_nodes:
+            child_nodes = []
+            child_nodes_covs = []
+            for parent, child in self.CGM_edges:
+                if (parent==node):
+                    # when a cov is the child node then store this in a separate dict
+                    if 'cov_' in child or 'lbl_' in child:
+                        child_nodes_covs.append(child)
+                    else:
+                        child_nodes.append(child)
+            if len(child_nodes): attr_subsets.append(child_nodes)
+            if len(child_nodes_covs): cov_subsets.append(child_nodes_covs)
+                
+        features_dict = {}
+        for f_type in feature_types:
+            if f_type == "attr_subsets":
+                # first add all attributes as a feature
+                features_dict.update({"attr_all": all_attr_cols})
+                for subset in attr_subsets:
+                    subset_name = ", ".join(subset)
+                    features_dict.update({f"attr_{subset_name}": subset})
+                    # also add each attribute individually
+                    # if len(subset)>1:
+                    #     for attr in subset:
+                    #         features_dict.update({f"attr_{attr}": [attr]})
+                        
+            elif f_type == "cov_subsets":
+                cov_cols = [cov for cov in all_cov_cols if lbl!=cov]
+                # first add all attributes as a feature
+                if len(cov_cols)>1: 
+                    features_dict.update({"cov_all": cov_cols})
+                    
+                for subset in cov_subsets:
+                    subset_name = ", ".join(subset)
+                    features_dict.update({subset_name: subset})
+                    # also add each attribute individually
+                    # if len(subset)>1:
+                    #     for cov in subset:
+                    #         features_dict.update({cov: [cov]})
+            else:
+                raise ValueError(f"{f_type} is an invalid feature_type. Valid input features for the baseline modelling are ['attr_subsets', 'cov_subsets']. See doc string for more info on what each tag means.")
+        return features_dict
+    
 
-        # set the target label
-        target = list(df['label'])
-
-        # set the data using data_type
-        columns = []
-        if 'attr' in data_type:
-            new_columns = df.filter(regex='^gen').columns.tolist()
-            columns += new_columns
-        if 'cov' in data_type:
-            new_columns = df.filter(regex='^cov').columns.tolist()
-            columns += new_columns
-            # if label is in the input features then remove 
-            if label in columns: columns.remove(label)
-
-        data = df[columns]
-
-        return data, target
-
+    
     # visualization
     def viz_baseline_results(self, run_results):
         ''' vizualization output of baseline models
@@ -817,7 +834,6 @@ class ToyBrainsData:
         x = 'test_metric'
         y = 'out'
         hue = 'inp'
-        hue_order = ['attr', 'attr+cov', 'cov']
         num_rows = viz_df[y].nunique()
         datasets = list(viz_df['dataset'].unique())
         num_subplots = len(datasets)
@@ -826,8 +842,7 @@ class ToyBrainsData:
         sns.set(style='whitegrid', context='paper')
         fig, axes = plt.subplots(num_subplots, 1,
                                  sharex=True, sharey=True,
-                                 constrained_layout=True,
-                                 figsize=(5,(num_rows)*num_subplots))
+                                 figsize=(6,1+(num_rows)*num_subplots))
         fs=12
         axes = axes.ravel() if num_subplots>1 else [axes] 
 
@@ -835,30 +850,29 @@ class ToyBrainsData:
         x_tick_positions = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
         x_tick_labels = ['0%', '20%', '40%', '60%', '80%', '100%']
         
-        for i, (ax, dataset) in enumerate(zip(axes, datasets)):
-            dfn = viz_df.query(f"dataset == '{dataset}'")
-
+        for i, (dataset, dfi) in enumerate(viz_df.groupby('dataset')):
+            ax = axes[i]
             # plotting details
             palette = sns.color_palette()
-
-            ax = sns.barplot(y=y, x=x, data=dfn, 
+            # put the feature sets with '_all' on top of the hue order
+            # hue_order = dfi[y].sort_values().unique()
+            # print(hue_order)
+            ax = sns.barplot(y=y, x=x, data=dfi, 
                             ax=ax,
-                            hue=hue, hue_order=hue_order, 
+                            hue=hue, #hue_order=hue_order,
                             errorbar=('ci', 95))
 
-            ax.set_title(f"dataset = {dataset}", fontsize=fs)
+            ax.set_title(f"Data: [{dataset}]", fontsize=fs)
             ax.set_xlabel("")
-            ax.set_ylabel("")
+            ax.set_ylabel("Predicted labels")
             ax.set_xticks(x_tick_positions)
             ax.set_xticklabels(x_tick_labels)         
             
             # adjust the legend
             if i==0:
                 handles,labels = ax.get_legend_handles_labels()
-                legend_label_map = {'attr':"Attributes", 'cov':"Covariates", 'attr+cov':"Attributes + Covariates"}
-                labels = [legend_label_map[l] for l in labels]
                 ax.legend(handles, labels, 
-                          loc='upper right', bbox_to_anchor=(1.6,1),
+                          loc='upper right', bbox_to_anchor=(2,1),
                           fontsize=fs-4,
                           frameon=True, title='Input features')
             else: ax.get_legend().remove()
@@ -870,7 +884,8 @@ class ToyBrainsData:
             fontsize=fs)
         
 
-        plt.suptitle("Baseline Analysis Plot", fontsize=fs+2)
+        # plt.suptitle("Baseline Analysis Plot", fontsize=fs+2)
+        plt.tight_layout()
         plt.show()
     # plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
 

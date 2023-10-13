@@ -25,23 +25,16 @@ def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=F
     (TODO) Refactoring support K-fold or stratified
     
     '''
-    # set random seed
     seed = random_seed
-    
-    # set raw csv path
-    raw_csv_path = raw_csv_path
-    
-    # set target label
-    label = label
-    
     # load the raw csv
     DF = pd.read_csv(raw_csv_path)
-    
-    # assign target label #TODO hardcoded - refactor
-    if 'cov_age' == label:
-        DF['label'] = DF['cov_age']
-    else:
-        DF['label'] = pd.factorize(DF[label])[0]
+    # define target label 
+    DF['label'] = DF[label]
+    #TODO hardcoded dtype change to categorical - refactor
+    # if 'cov_age' == label:
+    #     DF['label'] = DF['cov_age']
+    # else:
+    #     DF['label'] = pd.factorize(DF[label])[0]
     
     # split dataset into 80% for remaining and 20% for test
     DF_training, DF_test = train_test_split(DF, test_size=0.2, random_state=seed)

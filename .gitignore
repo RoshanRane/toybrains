@@ -10,3 +10,4 @@ nohup.out
 **/nohup*.out
 results/**/**/run.csv
 jupyterlog.out
+dataset/**/*.csv

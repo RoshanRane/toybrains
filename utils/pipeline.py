@@ -22,7 +22,7 @@ from utils.DLutils import (
     ToyBrainsDataset, LightningModel,
     PyTorchMLP, LogisticRegression, viz_batch
 )
-from utils.tabular import get_table_loader, run_lreg
+from utils.baseline import get_table_loader, run_lreg
 from utils.sklearn import get_reduc_loader, run_logistic_regression
 
 # functions
@@ -166,112 +166,6 @@ def run_baseline_pipeline(file_path, setting=None, debug=False):
     
     # delete the temp csv files
     os.system(f"rm {str(OUT_DIR)}/run_*.csv")
-    
-    runtime = str(datetime.now()-start_time).split(".")[0]
-    print(f'TOTAL RUNTIME: {runtime}')
-    
-# run baseline on attributes
-def run_baseline(
-    raw_csv_path,
-    DATA_DIR,
-    DATA_N,
-    OUT_DIR,
-    seed = 42,
-    debug = False,
-):
-    ''' run baseline 
-    
-    labels x data_type x models are fixed. More details can be found in NOTE below
-    
-    PARAMETERS
-    ----------
-    raw_csv_path : string
-        toybrains_n*.csv path
-    DATA_DIR : string
-        raw_csv_path input directory
-    DATA_N : string
-        n samples
-    OUT_DIR : string path or pathlib.PosixPath for the run.csv output directory
-    seed : int, default : 42
-        random state for reproducibility
-    debug : boolean, default : False
-        debug mode
-        
-    NOTE
-    ----
-    Support features, labels, and models
-    
-    features : x, x+c, c, c-y, x+c-y
-    labels : lblbin_shp, lblbin_shp-vol, lblbin_shp-vent, cov_sex, cov_age, cov_site
-    model : logistic regression, linear regression (pending)
-    
-    No hyperparmater tuning supported
-    
-    '''
-    if debug: print('run baseline')
-        
-    common = {
-        "dataset" : DATA_DIR,
-        "type" : "baseline",
-        "n_samples" : DATA_N,
-    }
-    
-    start_time = datetime.now()
-    # TODO cov_age kernel restarting error - TODO this should be automatically populated based on the csv
-    labels = ['lblbin_shp', 'lblbin_shp-vol', 'lblbin_shp-vent', 'cov_sex', 'cov_site'] #, 'cov_age']
-    features = ['x', 'x+c', 'c', 'c-y', 'x+c-y']
-    all_settings = []
-    for lbl in labels:
-        for ftr in features:
-            all_settings.append((lbl,ftr))
-    print(f'running a total of {len(all_settings)} different settings of [input features] x [labels]')
-    
-    # TODO parallel needed with settings dictionary
-    # loop
-    for label, feature in tqdm(all_settings):
-        
-        # split the dataset for training, validation, and test from raw dataset
-        dataset = generate_dataset(raw_csv_path, label, seed)
-        
-        # load the dataset
-        data = get_table_loader(dataset=dataset, label=label, data_type=feature, seed=seed)
-        if debug: print(f'Inputs: {data[0].columns}')
-
-        # run logistic regression and linear regression for tabular dataset
-        output, pipe = run_lreg(data)
-        num = pipe[0]
-        train_metric, val_metric, test_metric = output
-        if num == 2: model_name = 'logistic_regression'
-        if num == 4: model_name = 'multinomial_logistic_regression'
-        if num > 4: model_name = 'linear_regression'
-        
-        if debug:
-            print(f"Train metric: {train_metric:>8.4f} "
-                  f"Validation metric: {val_metric:>8.4f} "
-                  f"Test metric: {test_metric:>8.4f}")
-        
-        result = {
-            "inp" : feature,
-            "out" : label,
-            "model" : model_name,
-            "model_config" : pipe,
-            "train_metric" : train_metric,
-            "val_metric" : val_metric,
-            "test_metric" : test_metric
-        }
-        
-        result.update(common)
-        
-        df = pd.DataFrame([result])
-        df.to_csv(f"{str(OUT_DIR)}/run_bsl_{label}_{feature}_{model_name}.csv", index=False)
-    
-    df = pd.concat([pd.read_csv(csv) for csv in glob(f"{str(OUT_DIR)}/run_*.csv")], ignore_index=True)
-    df = df.sort_values(["dataset", "inp", "out", "type", "model"]) # sort
-    # (TODO) Reorder columns for readability
-    df.to_csv(f"{str(OUT_DIR)}/run.csv", index=False)
-    
-    # delete the temp csv files
-    os.system(f"rm {str(OUT_DIR)}/run_bsl_*.csv")
     
     runtime = str(datetime.now()-start_time).split(".")[0]
     print(f'TOTAL RUNTIME: {runtime}')
