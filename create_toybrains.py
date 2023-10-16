@@ -830,14 +830,11 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             else:
                 raise ValueError(f"{run} is neither a path to the results csv nor a pandas dataframe")
         viz_df = pd.concat(dfs, ignore_index=True)
-            
-        x = 'test_metric'
-        y = 'out'
-        hue = 'inp'
-        num_rows = viz_df[y].nunique()
         datasets = list(viz_df['dataset'].unique())
         num_subplots = len(datasets)
-
+        x='test_metric'
+        y='out'
+        num_rows = viz_df[y].nunique()
         # setup the figure properties
         sns.set(style='whitegrid', context='paper')
         fig, axes = plt.subplots(num_subplots, 1,
@@ -852,15 +849,24 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
         
         for i, (dataset, dfi) in enumerate(viz_df.groupby('dataset')):
             ax = axes[i]
-            # plotting details
-            palette = sns.color_palette()
-            # put the feature sets with '_all' on top of the hue order
-            # hue_order = dfi[y].sort_values().unique()
-            # print(hue_order)
-            ax = sns.barplot(y=y, x=x, data=dfi, 
-                            ax=ax,
-                            hue=hue, #hue_order=hue_order,
-                            errorbar=('ci', 95))
+            # use a different color set for attrs and lbls and conf
+            unique_inps = dfi['inp'].sort_values().unique()
+            palette_attr = sns.color_palette("mako", len(unique_inps))
+            palette_covs = sns.color_palette("husl", len(unique_inps))
+            palette = {}
+            m,n=0,0
+            for cat in unique_inps:
+                if 'attr_'==cat[:5]:
+                    palette.update({cat:palette_attr[m]})
+                    m+=1
+                else:
+                    palette.update({cat:palette_covs[n]})
+                    n+=1
+            
+            ax = sns.barplot(data=dfi, ax=ax,
+                             x=x, y=y, hue='inp', 
+                             palette=palette, #hue_order=hue_order, 
+                             errorbar=('ci', 95))
 
             ax.set_title(f"Data: [{dataset}]", fontsize=fs)
             ax.set_xlabel("")
@@ -870,9 +876,11 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             
             # adjust the legend
             if i==0:
-                handles,labels = ax.get_legend_handles_labels()
+                handles, labels = ax.get_legend_handles_labels()
+                labels = [lbl.replace(',', ',\n') if len(lbl) > 20 else lbl for lbl in labels]
+                    
                 ax.legend(handles, labels, 
-                          loc='upper right', bbox_to_anchor=(2,1),
+                          loc='upper right', bbox_to_anchor=(1.3,1.1),
                           fontsize=fs-4,
                           frameon=True, title='Input features')
             else: ax.get_legend().remove()
@@ -883,9 +891,8 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             r"{}  $R2$ or Pseudo-$R2$ (%)".format(x.replace('_',' ')), 
             fontsize=fs)
         
-
         # plt.suptitle("Baseline Analysis Plot", fontsize=fs+2)
-        plt.tight_layout()
+        # plt.tight_layout()
         plt.show()
     # plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
 
