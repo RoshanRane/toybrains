@@ -13,7 +13,7 @@ from colordict import ColorDict
 from joblib import Parallel, delayed  
 from copy import copy, deepcopy
 import itertools
-from tqdm.notebook import tqdm
+from tqdm.autonotebook import tqdm
 import argparse
 import importlib
 from datetime import datetime
@@ -590,9 +590,9 @@ class ToyBrainsData:
     def generate_dataset(self, n_samples, n_jobs=10, outdir_suffix='n'):
         """Creates toy dataset and save to disk."""
         # first generate dataset table and update self.df
-        self.generate_dataset_table(n_samples)
-        self.generate_dataset_images(n_jobs=n_jobs, 
+        self.generate_dataset_table(n_samples,
                                      outdir_suffix=outdir_suffix)
+        self.generate_dataset_images(n_jobs=n_jobs)
             
             
     def get_color_val(self, color):
@@ -830,72 +830,59 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             else:
                 raise ValueError(f"{run} is neither a path to the results csv nor a pandas dataframe")
         viz_df = pd.concat(dfs, ignore_index=True)
-        datasets = list(viz_df['dataset'].unique())
-        num_subplots = len(datasets)
-        x='test_metric'
-        y='out'
-        num_rows = viz_df[y].nunique()
-        # setup the figure properties
-        sns.set(style='whitegrid', context='paper')
-        fig, axes = plt.subplots(num_subplots, 1,
-                                 sharex=True, sharey=True,
-                                 figsize=(6,1+(num_rows)*num_subplots))
-        fs=12
-        axes = axes.ravel() if num_subplots>1 else [axes] 
-
+        
+        x="$R2$ / Pseudo-$R2$ (%) on test data"
+        y="Predicted Output"
+        row="Output type"
+        col="Dataset"
+        hue="Input features"
+        viz_df = viz_df.rename(columns={'test_metric':x, 'out':y, 
+                                        'inp':hue, 'dataset':col})
+        # separate covariates and labels
+        map_out_type = {'cov':'Covariates','lbl':'Label'}
+        viz_df[row] = viz_df[y].apply(lambda x: x.split('_')[0])
+        # adjust the hue for the legend
+        viz_df[hue] = viz_df[hue].apply(lambda x: x.replace(', ',',\n'))
+        unique_inps = viz_df[hue].sort_values().unique()
+        unique_cols = viz_df[col].sort_values().unique()
+        unique_y    = viz_df[y].sort_values().unique()
+        # use a different color set for attrs and lbls and conf in inputs
+        palette_attr = sns.color_palette("mako", len(unique_inps))
+        palette_covs = sns.color_palette("husl", len(unique_inps))
+        palette = {}
+        m,n=0,0
+        for cat in unique_inps:
+            if cat[:5]=='attr_':
+                palette.update({cat:palette_attr[m]})
+                m+=1
+            else:
+                palette.update({cat:palette_covs[n]})
+                n+=1
+        
+        height = 1+len(unique_y)//2
+        g = sns.catplot(data=viz_df, kind='bar',
+                        col=col, row=row,
+                        # show labels before covariates
+                        row_order=['lbl','cov'], 
+                        x=x, y=y, hue=hue, 
+                        palette=palette, #hue_order=hue_order, 
+                        errorbar=('ci', 95), 
+                        legend=True, legend_out=True,
+                        sharey='row', height=height, aspect=1.7)
+        
+        # adjust subplot titles
+        g.set_titles("{col_var}: {col_name}") 
+        for i, ax in enumerate(g.axes.ravel()):
+            if i>=len(unique_cols): ax.set_title('')
+        # adjust legend
+        g._legend.set_frame_on(True)
         # set custom x-axis tick positions and labels
-        x_tick_positions = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
-        x_tick_labels = ['0%', '20%', '40%', '60%', '80%', '100%']
-        
-        for i, (dataset, dfi) in enumerate(viz_df.groupby('dataset')):
-            ax = axes[i]
-            # use a different color set for attrs and lbls and conf
-            unique_inps = dfi['inp'].sort_values().unique()
-            palette_attr = sns.color_palette("mako", len(unique_inps))
-            palette_covs = sns.color_palette("husl", len(unique_inps))
-            palette = {}
-            m,n=0,0
-            for cat in unique_inps:
-                if 'attr_'==cat[:5]:
-                    palette.update({cat:palette_attr[m]})
-                    m+=1
-                else:
-                    palette.update({cat:palette_covs[n]})
-                    n+=1
-            
-            ax = sns.barplot(data=dfi, ax=ax,
-                             x=x, y=y, hue='inp', 
-                             palette=palette, #hue_order=hue_order, 
-                             errorbar=('ci', 95))
-
-            ax.set_title(f"Data: [{dataset}]", fontsize=fs)
-            ax.set_xlabel("")
-            ax.set_ylabel("Predicted labels")
-            ax.set_xticks(x_tick_positions)
-            ax.set_xticklabels(x_tick_labels)         
-            
-            # adjust the legend
-            if i==0:
-                handles, labels = ax.get_legend_handles_labels()
-                labels = [lbl.replace(',', ',\n') if len(lbl) > 20 else lbl for lbl in labels]
-                    
-                ax.legend(handles, labels, 
-                          loc='upper right', bbox_to_anchor=(1.3,1.1),
-                          fontsize=fs-4,
-                          frameon=True, title='Input features')
-            else: ax.get_legend().remove()
-            
-
-        # add labels for the last subplot
-        axes[-1].set_xlabel(
-            r"{}  $R2$ or Pseudo-$R2$ (%)".format(x.replace('_',' ')), 
-            fontsize=fs)
-        
-        # plt.suptitle("Baseline Analysis Plot", fontsize=fs+2)
-        # plt.tight_layout()
+        g.set(xticks=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+              xticklabels = ['0%', '20%', '40%', '60%', '80%', '100%']) 
         plt.show()
     # plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
 
+    
     # summary
     def _show_baseline_results(self, 
         split=None,
@@ -936,8 +923,8 @@ if __name__ == "__main__":
     parser.add_argument('--dir', default='dataset/toybrains', type=str)
     parser.add_argument('-c', default = 'configs.lbl1cov1', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
-    parser.add_argument('--n_jobs', default=10, type=int)
-    parser.add_argument('--suffix', default = 'n', type=str)
+    parser.add_argument('-j','--n_jobs', default=20, type=int)
+    parser.add_argument('-s','--suffix', default = 'n', type=str)
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
 
