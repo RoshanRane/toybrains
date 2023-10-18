@@ -11,3 +11,6 @@ nohup.out
 results/**/**/run.csv
 jupyterlog.out
 dataset/**/*.csv
+**/logs/
+**/*.pt
+**/*.ckpt

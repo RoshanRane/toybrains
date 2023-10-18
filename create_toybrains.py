@@ -13,7 +13,7 @@ from colordict import ColorDict
 from joblib import Parallel, delayed  
 from copy import copy, deepcopy
 import itertools
-from tqdm.autonotebook import tqdm
+from tqdm.auto import tqdm
 import argparse
 import importlib
 from datetime import datetime
