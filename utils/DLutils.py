@@ -11,6 +11,7 @@ from torchvision import datasets, transforms
 
 import lightning as L
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torchmetrics
 import torchvision
@@ -19,64 +20,6 @@ import torchvision
 #################################################################################################
 # DATA MODULE
 #################################################################################################
-
-# functions
-
-def generate_dataset(raw_csv_path, label, random_seed=42, debug=False):
-    '''
-    generate the dataset
-    
-    PARAMETERS
-    ----------
-    raw_csv_path : string
-        csv path
-        
-    label : string
-        labels, 'lblbin_stop-smidl-bvol', 'lblbin_stop-smidl-vthick', 'lblbin_bvol-vthick'
-    
-    random_seed : integer, default : 42
-        random seed number
-    
-    NOTE
-    ----
-    (TODO) change function to class
-    (TODO) Refactoring `torch.utils.data.random_split` or support K-fold or stratified
-    
-    '''
-    # set random seed
-    seed = random_seed
-    
-    # set raw csv path
-    raw_csv_path = raw_csv_path
-    
-    # set target label
-    label = label
-    
-    # load the raw csv
-    DF = pd.read_csv(raw_csv_path)
-    
-    # assign target label
-    DF['label'] = DF[label].astype(int)
-    
-    # split dataset into 80% for training and 20% for remaining
-    DF_train, DF_remaining = train_test_split(DF, test_size=0.2, random_state=seed)
-    
-    # split remaining 20% into 10% for validation and 10% for test
-    DF_val, DF_test = train_test_split(DF_remaining, test_size=0.5, random_state=seed)
-    
-    # reset the index
-    DF_train.reset_index(inplace=True, drop=True)
-    DF_val.reset_index(inplace=True, drop=True)
-    DF_test.reset_index(inplace=True, drop=True)
-    
-    # print the number of rows in each dataframe
-    if debug:
-        print(f"Raw:   {len(DF)}\n"
-              f"Train:  {len(DF_train)}\n"
-              f"Val:    {len(DF_val)}\n"
-              f"Test:   {len(DF_test)}")
-    
-    return DF_train, DF_val, DF_test
     
 
 def get_dataset_loaders(data_split_dfs,
@@ -98,7 +41,7 @@ def get_dataset_loaders(data_split_dfs,
     for data_split_df in data_split_dfs:
         dataset = ToyBrainsDataset(
                     df=data_split_df,
-                    img_dir=f'dataset/{data_dir}/images',
+                    img_dir=f'{data_dir}/images',
                     transform=transforms.Compose(
                         [transforms.ToTensor()]+transform)
                     )
@@ -131,7 +74,7 @@ class ToyBrainsDataset(Dataset):
         if self.transform is not None:
             img = self.transform(img)
             
-        label = self.labels[index]
+        label = torch.as_tensor(self.labels[index]).type(torch.LongTensor)
         return img, label
     
     def __len__(self):
@@ -194,9 +137,9 @@ class LightningModel(L.LightningModule):
 
 class LogisticRegression(torch.nn.Module):
     
-    def __init__(self, num_features):
+    def __init__(self, num_features, num_classes, bias):
         super().__init__()
-        self.linear = torch.nn.Linear(num_features, 2)
+        self.linear = torch.nn.Linear(num_features, num_classes, bias)
     
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
@@ -222,8 +165,62 @@ class PyTorchMLP(torch.nn.Module):
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
         logits = self.all_layers(x)
-        return logits
+        probas = torch.sigmoid(logits)
+        return probas
 
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+            nn.MaxPool2d(2,2),
+        )
+
+        self._init_weights()
+        
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.zeros_(m.bias)
+        
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+    
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        
+        # convolutional layers
+        self.conv = nn.Sequential(
+            ConvBlock(in_channels=3, out_channels=32),
+            ConvBlock(in_channels=32, out_channels=64),
+            ConvBlock(in_channels=64, out_channels=128),
+        )
+        
+        # fully connected layers
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.2),
+            # TODO hardcoded input size
+            nn.Linear(128 * 8 * 8, 128),
+            nn.Dropout(0.1),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.fc(x)
+        probas = torch.sigmoid(x)
+        return probas
 
 #################################################################################################
 # Visualization
