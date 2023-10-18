@@ -25,7 +25,7 @@ import torchvision
 def get_dataset_loaders(data_split_dfs,
                         data_dir="toybrains", 
                         batch_size=16, shuffle=True, 
-                        num_workers=0, transform=[],
+                        num_workers=10, transform=[],
                         ):
     ''' Creates pytorch dataloaders of the ToyBrainsDataset for all the 
     dataframes passed in *args
