@@ -11,6 +11,7 @@ from torchvision import datasets, transforms
 
 import lightning as L
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torchmetrics
 import torchvision
@@ -136,9 +137,9 @@ class LightningModel(L.LightningModule):
 
 class LogisticRegression(torch.nn.Module):
     
-    def __init__(self, num_features):
+    def __init__(self, num_features, num_classes, bias):
         super().__init__()
-        self.linear = torch.nn.Linear(num_features, 2)
+        self.linear = torch.nn.Linear(num_features, num_classes, bias)
     
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
@@ -164,8 +165,62 @@ class PyTorchMLP(torch.nn.Module):
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
         logits = self.all_layers(x)
-        return logits
+        probas = torch.sigmoid(logits)
+        return probas
 
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+            nn.MaxPool2d(2,2),
+        )
+
+        self._init_weights()
+        
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.zeros_(m.bias)
+        
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+    
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        
+        # convolutional layers
+        self.conv = nn.Sequential(
+            ConvBlock(in_channels=3, out_channels=32),
+            ConvBlock(in_channels=32, out_channels=64),
+            ConvBlock(in_channels=64, out_channels=128),
+        )
+        
+        # fully connected layers
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.2),
+            # TODO hardcoded input size
+            nn.Linear(128 * 8 * 8, 128),
+            nn.Dropout(0.1),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.fc(x)
+        probas = torch.sigmoid(x)
+        return probas
 
 #################################################################################################
 # Visualization

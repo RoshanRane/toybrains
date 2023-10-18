@@ -1,6 +1,8 @@
 .ipynb_checkpoints/
 *_checkpoint*
 toybrains/
+dataset/
+results/
 **/images/*.jpg
 **/labels/*.jpg
 **/toybrains_n*.csv
@@ -8,9 +10,6 @@ toybrains/
 *.cpython-*.pyc
 nohup.out
 **/nohup*.out
-results/**/**/run.csv
-jupyterlog.out
-dataset/**/*.csv
 **/logs/
 **/*.pt
 **/*.ckpt
