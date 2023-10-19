@@ -1,21 +1,25 @@
-import os
-from collections import Counter
-import pandas as pd
+import os, sys
+from glob import glob
 import numpy as np
+import pandas as pd
+from collections import Counter
 from sklearn.model_selection import train_test_split
 from PIL import Image
 import matplotlib.pyplot as plt
 
-from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets, transforms
-
-import lightning as L
+# deep learning imports
 import torch
+from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
-import torchmetrics
-import torchvision
+import torchvision, torchmetrics
+import lightning as L
+from torchvision import datasets, transforms
+from lightning.pytorch.loggers import CSVLogger
+# import monai
 
+# custom imports 
+from utils.dataset import split_dataset
 
 #################################################################################################
 # DATA MODULE
@@ -24,7 +28,8 @@ import torchvision
 
 def get_dataset_loaders(data_split_dfs,
                         data_dir="toybrains", 
-                        batch_size=16, shuffle=True, 
+                        batch_size=16, 
+                        shuffles=[True, False, False], 
                         num_workers=10, transform=[],
                         ):
     ''' Creates pytorch dataloaders of the ToyBrainsDataset for all the 
@@ -37,8 +42,9 @@ def get_dataset_loaders(data_split_dfs,
     '''
     # (TODO) Validation and Test should be set shuffle=False (wrong imlementation)
     data_loaders = []
+    assert len(shuffles) == len(data_split_dfs)
     
-    for data_split_df in data_split_dfs:
+    for i,data_split_df in enumerate(data_split_dfs):
         dataset = ToyBrainsDataset(
                     df=data_split_df,
                     img_dir=f'{data_dir}/images',
@@ -48,7 +54,7 @@ def get_dataset_loaders(data_split_dfs,
         data_loader = DataLoader(
                         dataset=dataset,
                         batch_size=batch_size,
-                        shuffle=shuffle,
+                        shuffle=shuffles[i],
                         num_workers=num_workers
                     )
         data_loaders.append(data_loader)
@@ -244,10 +250,120 @@ def viz_batch(loader, title="Training images", debug=False):
             
     plt.figure(figsize=(8, 8))
     plt.axis("off")
-    plt.title(title+f"\nlabels={lbls}")
+    lbls_str = str(lbls)
+    if len(lbls_str)>100:
+        lbls_str = lbls_str[:100]+'\n'+lbls_str[100:]
+    plt.title(title+f"\nlabels={lbls_str}")
     plt.imshow(
         np.transpose(
         torchvision.utils.make_grid(
             imgs, padding=1, pad_value=1.0, normalize=True), 
         (1, 2, 0)))
     plt.show()
+    
+    
+###########################################################################################
+############       Main function: Deep learning models fit on toybrains       #############
+###########################################################################################
+'''
+> Dev log (format < Date > | <Author(s)> )  
+> - Developed: 30 May 2023 | JiHoon Kim <br>
+> - Tested and improved: 17 July 2023 | Roshan Rane <br>
+> - Tested: 28 July 2023 | JiHoon Kim <br>
+> - Updated: 18 October 2023 | JiHoon Kim | Roshan Rane <br>
+'''
+
+def fit_DL_model(dataset_path,
+                label,
+                model = SimpleCNN(num_classes=2),
+                GPUs = [1], max_epochs=10,
+                show_batch=False, show_training_curves=True,
+                random_seed=None, debug=False):
+    
+    # set GPU settings
+    torch.set_float32_matmul_precision('medium')
+    
+    if debug: 
+        os.environ["CUDA_LAUNCH_BLOCKING"]=1
+        random_seed = 42
+        
+    if random_seed is not None:
+        torch.manual_seed(random_seed) 
+        np.random.seed(random_seed)
+        random.seed(random_seed)
+        # set the seed for Lightning
+        L.seed_everything(random_seed)
+    
+    # load the dataset
+    unique_name = dataset_path.split('/')[-1].split('_')[-1]
+    raw_csv_path = glob(f'{dataset_path}/*{unique_name}.csv')[0]
+    data_df = pd.read_csv(raw_csv_path)
+    # split the dataset
+    df_train, df_val, df_test = split_dataset(raw_csv_path, label, random_seed)
+    print(f"Dataset: {dataset_path} ({unique_name})\n  Training data split = {len(df_train)} \n \
+  Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
+    
+    # generate data loaders
+    train_loader, val_loader, test_loader = get_dataset_loaders(
+                    data_split_dfs=[df_train, df_val, df_test],
+                    shuffles=[True,False,False],
+                    data_dir=dataset_path,
+                    batch_size=64, 
+                    num_workers=20, transform=[])
+    if show_batch or debug:
+        viz_batch(val_loader, title="Validation data")
+
+    
+    # load model
+    lightning_model = LightningModel(model, learning_rate=0.05)
+    logger = CSVLogger(save_dir="logs/", name=unique_name)
+    
+    # train model
+    trainer = L.Trainer(max_epochs=max_epochs,
+                        accelerator="gpu", devices=GPUs,
+                        logger=logger) #deterministic=True
+    trainer.fit(
+    model=lightning_model,
+    train_dataloaders=train_loader,
+    val_dataloaders=val_loader)
+    
+    # show training curves
+    if show_training_curves:
+        metrics = pd.read_csv(f"{logger.log_dir}/metrics.csv")
+        aggreg_metrics = []
+        agg_col = "epoch"
+        for i, dfg in metrics.groupby(agg_col):
+            agg = dict(dfg.mean())
+            agg[agg_col] = i
+            aggreg_metrics.append(agg)
+        
+        f, axes = plt.subplots(1,2, sharex=True, 
+                               constrained_layout=True, 
+                               figsize=(7,3))
+        df_metrics = pd.DataFrame(aggreg_metrics)
+        df_metrics[["train_loss", "val_loss"]].plot(
+            ylabel="Loss", ax=axes[0],
+            grid=True, legend=True, xlabel="Epoch", 
+        )
+        df_metrics[["train_acc", "val_acc"]].plot(
+            ylabel="Accuracy", ax=axes[1],
+            grid=True, legend=True, xlabel="Epoch", ylim=(0,1)
+        )
+        plt.show()
+        
+    # test model
+    train_acc = trainer.test(lightning_model, verbose=False, 
+                             dataloaders=train_loader)[0]["accuracy"] #TODO use balanced accuracy?
+    val_acc = trainer.test(lightning_model, verbose=False, 
+                           dataloaders=val_loader)[0]["accuracy"]
+    test_acc = trainer.test(lightning_model, verbose=False, 
+                            dataloaders=test_loader)[0]["accuracy"]
+
+    print(
+        f"Final accuracy on Dataset: {dataset_path} ({unique_name})\n"+
+        f"Train Acc {train_acc*100:.2f}"+
+        f" | Val Acc {val_acc*100:.2f}"+
+        f" | Test Acc {test_acc*100:.2f}"
+    )
+    
+    return trainer, logger

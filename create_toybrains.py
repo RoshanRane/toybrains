@@ -5,7 +5,7 @@ import random
 import pandas as pd
 import matplotlib
 from matplotlib import pyplot as plt
-plt.style.use("seaborn-v0_8-white") #'dark_background','seaborn-v0_8-muted', 'seaborn-v0_8-notebook',
+plt.style.use("seaborn-v0_8-whitegrid") #'dark_background','seaborn-v0_8-muted', 'seaborn-v0_8-notebook',
 import seaborn as sns
 import math
 from PIL import Image, ImageDraw
@@ -22,9 +22,6 @@ from tabulate import tabulate
 # add custom imports
 from utils.dataset import split_dataset
 from utils.baseline import run_lreg
-
-# sys.path.insert(0, "../")
-# sns.set_theme(style="ticks", palette="pastel")
 
 import graphviz
 from causalgraphicalmodels import CausalGraphicalModel
@@ -119,10 +116,29 @@ class ToyBrainsData:
         # initialize all the generative properties for the images and the labels and covariates
         self._setup_genvars_covars()
         
-        # Import the covariates and the base configured in covariates-to-image-attribute relationships
+        # Import the covariates and covariates-to-image-attribute relationships
+        self._load_config(config)
+            
+        self._init_df()
+        # store a dict of results tables (run.csv) on the dataset
+        self.results = {"baseline_results":None,
+                        "supervised_results":None,
+                        "unsupervised_results":None,
+                       }
+        
+
+    ### INIT METHODS
+    def _init_df(self):
+        # Initialize a table to store all dataset attributes
+        columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))                
+        self.df =  pd.DataFrame(columns=columns)
+        self.df.index.name = "subjectID"  
+    
+    
+    def _load_config(self, config_file):
         # if user provided '.py' in the config filename argument then remove it
-        if config[-3:]=='.py': config = config[:-3]
-        config = importlib.import_module(config)
+        if config_file[-3:]=='.py': config_file = config_file[:-3]
+        config = importlib.import_module(config_file)
         assert hasattr(config, 'COVARS')
         self.COVARS = {cov: PROB_VAR(name=cov, **states) for cov, states in config.COVARS.items()}
         assert hasattr(config, 'RULES_COV_TO_GEN')
@@ -138,6 +154,7 @@ class ToyBrainsData:
                         
                 
         self.RULES_COV_TO_GEN = config.RULES_COV_TO_GEN
+        
         # compute the nodes and edges of the configuration for forming a Causal Graphical Model
         nodes, edges = set(), set()
         for c, c_states in self.RULES_COV_TO_GEN.items():
@@ -149,14 +166,79 @@ class ToyBrainsData:
                     
         self.CGM_nodes = sorted(list(nodes))
         self.CGM_edges = sorted(list(edges))    
+        
             
-        self._init_df()
-        # store a dict of results tables (run.csv) on the dataset
-        self.results = {"baseline_results":None,
-                        "supervised_results":None,
-                        "unsupervised_results":None,
-                       }
+    def _reset_vars(self):
+        [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
+        [gen_var.reset_weights() for _, gen_var in self.COVARS.items()]
 
+
+    def _get_rule(self, cov_name, cov_state):
+        '''Function handles situations in the config of RULES_COV_TO_GEN such as when
+         user provides a tuple of values as cov_state (continuous) instead of a single cov_state'''
+        rules = self.RULES_COV_TO_GEN[cov_name]
+        if cov_state in rules.keys():
+            return rules[cov_state]
+        else:
+            for cov_rule in rules.keys():
+                if isinstance(cov_rule, tuple):
+                    if cov_state in cov_rule:
+                        return rules[cov_rule]
+            else:
+                return None
+            
+    def _adjust_covar_dists_and_sample(self, fix_covar={}):
+        # separate the covars into parent and child nodes of the causal links
+        child_covs = set()
+        for cov_name, cov_state in self.RULES_COV_TO_GEN.items():
+            for cov_state, rules in cov_state.items():
+                for child_node, child_node_rule in rules.items():
+                    if child_node in self.COVARS.keys():
+                        child_covs.add(child_node)
+        child_covs = list(child_covs)
+                
+        # first, sample the parent covars
+        covars = {}
+        for cov_name, covar in self.COVARS.items():
+            if cov_name not in child_covs:
+                if cov_name not in fix_covar:
+                    cov_state = covar.sample()
+                else:
+                    cov_state = fix_covar[cov_name]
+                covars.update({cov_name: cov_state})
+                # adjust the probability of the child covars if there is a rule
+                rules = self._get_rule(cov_name, cov_state)
+                for var, rule in rules.items():
+                    if var in child_covs:
+                        self.COVARS[var].bump_up_weight(**rule)
+                
+        # now, sample the child covars with the adjusted dists
+        for cov_name, covar in self.COVARS.items():
+            if cov_name in child_covs:
+                covars.update({cov_name: covar.sample()})
+        
+        return covars
+        
+    def _adjust_genvar_dists(self, covars):
+        """Configure the relationship between covariates and the generative attributes"""
+        ### model `Covariates -> image attributes` distribution
+        for cov_name, cov_state in covars.items():
+            rules = self._get_rule(cov_name, cov_state)
+            if (cov_name not in self.RULES_COV_TO_GEN.keys()) or (rules is None):
+                # print unconfigured covs for debug
+                if self.debug: print(f"[WARN] No rules have been defined for covariate = {cov_name} with state = {cov_state}")
+                continue
+            else:
+                for var, rule in rules.items():
+                    # ignore rules that are for cov->cov relation
+                    if var in self.GENVARS:
+                        self.GENVARS[var].bump_up_weight(**rule)
+              
+    def update_tweaks(self, RULES_COV_TO_GEN_TWEAKED):
+        for key, states in RULES_COV_TO_GEN_TWEAKED.items():
+            for state, new_values in states.items():
+                 self.RULES_COV_TO_GEN[key][state] = new_values          
+        
 ##########################################  methods for config and viz #############################################
 
     def show_all_states(self):
@@ -397,79 +479,6 @@ class ToyBrainsData:
             })
         
         
-    ### INIT METHODS
-    def _init_df(self):
-        # Initialize a table to store all dataset attributes
-        columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))                
-        self.df =  pd.DataFrame(columns=columns)
-        self.df.index.name = "subjectID"   
-            
-            
-    def _reset_vars(self):
-        [gen_var.reset_weights() for _, gen_var in self.GENVARS.items()]
-        [gen_var.reset_weights() for _, gen_var in self.COVARS.items()]
-
-
-    def _get_rule(self, cov_name, cov_state):
-        '''Function handles situations in the config of RULES_COV_TO_GEN such as when
-         user provides a tuple of values as cov_state (continuous) instead of a single cov_state'''
-        rules = self.RULES_COV_TO_GEN[cov_name]
-        if cov_state in rules.keys():
-            return rules[cov_state]
-        else:
-            for cov_rule in rules.keys():
-                if isinstance(cov_rule, tuple):
-                    if cov_state in cov_rule:
-                        return rules[cov_rule]
-            else:
-                return None
-            
-    def _adjust_covar_dists_and_sample(self, fix_covar={}):
-        # separate the covars into parent and child nodes of the causal links
-        child_covs = set()
-        for cov_name, cov_state in self.RULES_COV_TO_GEN.items():
-            for cov_state, rules in cov_state.items():
-                for child_node, child_node_rule in rules.items():
-                    if child_node in self.COVARS.keys():
-                        child_covs.add(child_node)
-        child_covs = list(child_covs)
-                
-        # first, sample the parent covars
-        covars = {}
-        for cov_name, covar in self.COVARS.items():
-            if cov_name not in child_covs:
-                if cov_name not in fix_covar:
-                    cov_state = covar.sample()
-                else:
-                    cov_state = fix_covar[cov_name]
-                covars.update({cov_name: cov_state})
-                # adjust the probability of the child covars if there is a rule
-                rules = self._get_rule(cov_name, cov_state)
-                for var, rule in rules.items():
-                    if var in child_covs:
-                        self.COVARS[var].bump_up_weight(**rule)
-                
-        # now, sample the child covars with the adjusted dists
-        for cov_name, covar in self.COVARS.items():
-            if cov_name in child_covs:
-                covars.update({cov_name: covar.sample()})
-        
-        return covars
-        
-    def _adjust_genvar_dists(self, covars):
-        """Configure the relationship between covariates and the generative attributes"""
-        ### model `Covariates -> image attributes` distribution
-        for cov_name, cov_state in covars.items():
-            rules = self._get_rule(cov_name, cov_state)
-            if (cov_name not in self.RULES_COV_TO_GEN.keys()) or (rules is None):
-                # print unconfigured covs for debug
-                if self.debug: print(f"[WARN] No rules have been defined for covariate = {cov_name} with state = {cov_state}")
-                continue
-            else:
-                for var, rule in rules.items():
-                    # ignore rules that are for cov->cov relation
-                    if var in self.GENVARS:
-                        self.GENVARS[var].bump_up_weight(**rule)
         
         
     def generate_dataset_table(self, n_samples, outdir_suffix='n'):
@@ -595,6 +604,11 @@ class ToyBrainsData:
         self.generate_dataset_images(n_jobs=n_jobs)
             
             
+    def load_generated_dataset(self, dataset_path):
+        self.OUT_DIR_SUF = dataset_path
+        self.df = pd.read_csv(glob(f'{dataset_path}/toybrains_*.csv')[0])
+         
+            
     def get_color_val(self, color):
         if isinstance(color, str):
             # if there is a number tag on the color then remove it
@@ -641,7 +655,10 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             debug mode
         '''
         # sanity check that the dataset table has been loaded
-        assert len(self.df)>0, "first generate the dataset table using self.generate_dataset_table() method." 
+        assert len(self.df)>0 and hasattr(self, "OUT_DIR_SUF"), "first generate the dataset table \
+using self.generate_dataset_table() method or load an already generated dataset using \
+self.load_generated_dataset()" 
+        
         start_time = datetime.now()
         df_csv_path = glob(f"{self.OUT_DIR_SUF}/toybrains_*.csv")[0]
             
@@ -710,7 +727,6 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
         print(f'TOTAL RUNTIME: {runtime}')
         self.results["baseline_results"]= df_out
         self._show_baseline_results()
-        # self.viz_baseline_results(df_out)
         return df_out
     
 
@@ -873,7 +889,12 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
         # adjust subplot titles
         g.set_titles("{col_var}: {col_name}") 
         for i, ax in enumerate(g.axes.ravel()):
-            if i>=len(unique_cols): ax.set_title('')
+            if i==0:
+                title = ax.get_title()
+            elif i<len(unique_cols): 
+                ax.set_title(ax.get_title().replace(title,'.. '))
+            else: 
+                ax.set_title('')
         # adjust legend
         g._legend.set_frame_on(True)
         # set custom x-axis tick positions and labels
