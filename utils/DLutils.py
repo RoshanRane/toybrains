@@ -2,6 +2,7 @@ import os, sys
 from glob import glob
 import numpy as np
 import pandas as pd
+import random
 from collections import Counter
 from sklearn.model_selection import train_test_split
 from PIL import Image
@@ -12,58 +13,25 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
+from torchmetrics import Metric
 import torchvision, torchmetrics
-import lightning as L
 from torchvision import datasets, transforms
+import lightning as L
+
 from lightning.pytorch.loggers import CSVLogger
 # import monai
 
 # custom imports 
 from utils.dataset import split_dataset
+from utils.metrics import explained_deviance
 
-#################################################################################################
-# DATA MODULE
-#################################################################################################
-    
 
-def get_dataset_loaders(data_split_dfs,
-                        data_dir="toybrains", 
-                        batch_size=16, 
-                        shuffles=[True, False, False], 
-                        num_workers=10, transform=[],
-                        ):
-    ''' Creates pytorch dataloaders of the ToyBrainsDataset for all the 
-    dataframes passed in *args
-    
-    NOTES
-    ----
-    reference: https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit05-lightning/5.5-datamodules
-    TODO: refactoring ToyBrainsDataModule
-    '''
-    # (TODO) Validation and Test should be set shuffle=False (wrong imlementation)
-    data_loaders = []
-    assert len(shuffles) == len(data_split_dfs)
-    
-    for i,data_split_df in enumerate(data_split_dfs):
-        dataset = ToyBrainsDataset(
-                    df=data_split_df,
-                    img_dir=f'{data_dir}/images',
-                    transform=transforms.Compose(
-                        [transforms.ToTensor()]+transform)
-                    )
-        data_loader = DataLoader(
-                        dataset=dataset,
-                        batch_size=batch_size,
-                        shuffle=shuffles[i],
-                        num_workers=num_workers
-                    )
-        data_loaders.append(data_loader)
 
-    return data_loaders
+###########################################################################################
+############################          Dataloader         ##################################
+###########################################################################################
 
-# classes
-
-class ToyBrainsDataset(Dataset):
+class ToyBrainsDataloader(Dataset):
     def __init__(self, df, img_dir, transform=None):
         self.img_dir = img_dir
         self.transform = transform
@@ -85,20 +53,63 @@ class ToyBrainsDataset(Dataset):
     
     def __len__(self):
         return self.labels.shape[0]
+    
+    
+    
+def get_dataset_loaders(data_split_dfs,
+                        data_dir="toybrains", 
+                        batch_size=16, 
+                        shuffles=[True, False, False], 
+                        num_workers=30, transform=[],
+                        ):
+    ''' Creates pytorch dataloaders of the ToyBrainsDataloader for all the 
+    dataframes passed in *args
 
-# LightningModule that receives a PyTorch model as input
-# (TODO) add lr scheduler, etc.
-# https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit06-dl-tips/6.2-learning-rates
+    NOTES
+    ----
+    reference: https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit05-lightning/5.5-datamodules
+    TODO: refactoring ToyBrainsDataModule
+    '''
+    data_loaders = []
+    assert len(shuffles) == len(data_split_dfs)
+    
+    for i,data_split_df in enumerate(data_split_dfs):
+        dataset = ToyBrainsDataloader(
+                    df=data_split_df,
+                    img_dir=f'{data_dir}/images',
+                    transform=transforms.Compose(
+                        [transforms.ToTensor()]+transform)
+                    )
+        data_loader = DataLoader(
+                        dataset=dataset,
+                        batch_size=batch_size,
+                        shuffle=shuffles[i],
+                        num_workers=num_workers
+                    )
+        data_loaders.append(data_loader)
+
+    return data_loaders
+    
+
+#################################################################################################
+####################       LIGHTNING trainer class and helpers    ###############################
+#################################################################################################
+
+
 class LightningModel(L.LightningModule):
-    def __init__(self, model, learning_rate):
+    
+    def __init__(self, model, learning_rate,
+                 task="binary", num_classes=2):
+        '''LightningModule that receives a PyTorch model as input'''
+        # (TODO) add lr scheduler, etc.
+        # https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit06-dl-tips/6.2-learning-rates
         super().__init__()
-
         self.learning_rate = learning_rate
         self.model = model
-
-        self.train_acc = torchmetrics.Accuracy(task="binary", num_classes=2)
-        self.val_acc = torchmetrics.Accuracy(task="binary", num_classes=2)
-        self.test_acc = torchmetrics.Accuracy(task="binary", num_classes=2)
+        # self.metric_acc = torchmetrics.Accuracy(task=task, num_classes=num_classes) 
+        self._metric_spec = torchmetrics.Specificity(task=task, num_classes=num_classes)
+        self._metric_recall = torchmetrics.Recall(task=task, num_classes=num_classes)
+        self.metric_D2 = D2metric() 
 
     def forward(self, x):
         return self.model(x)
@@ -106,36 +117,70 @@ class LightningModel(L.LightningModule):
     def _shared_step(self, batch):
         features, true_labels = batch
         logits = self(features)
-
+        # compute all metrics on the predictions
         loss = F.cross_entropy(logits, true_labels)
         predicted_labels = torch.argmax(logits, dim=1)
-        return loss, true_labels, predicted_labels
+        # acc = self.metric_acc(predicted_labels, true_labels)
+        # calculate balanced accuracy
+        spec = self._metric_spec(predicted_labels, true_labels)
+        recall = self._metric_recall(predicted_labels, true_labels)
+        BAC = (spec+recall)/2
+        D2 = self.metric_D2(logits, true_labels)
+        return {'loss':loss, 'BAC':BAC, 'D2':D2}
 
     def training_step(self, batch, batch_idx):
-        loss, true_labels, predicted_labels = self._shared_step(batch)
-
-        self.log("train_loss", loss)
-        self.train_acc(predicted_labels, true_labels)
-        self.log(
-            "train_acc", self.train_acc, prog_bar=True, on_epoch=True, on_step=False
-        )
-        return loss
+        metrics = self._shared_step(batch)
+        # append 'train_' to every key
+        metrics = {'train_'+k:v for k,v in metrics.items()}
+        self.log_dict(metrics,
+                      prog_bar=True, 
+                      on_epoch=True, on_step=False)
+        return metrics['train_loss']
 
     def validation_step(self, batch, batch_idx):
-        loss, true_labels, predicted_labels = self._shared_step(batch)
-
-        self.log("val_loss", loss, prog_bar=True)
-        self.val_acc(predicted_labels, true_labels)
-        self.log("val_acc", self.val_acc, prog_bar=True)
+        metrics = self._shared_step(batch)
+        # append 'val_' to every key
+        metrics = {'val_'+k:v for k,v in metrics.items()}
+        self.log_dict(metrics,
+                      prog_bar=True, 
+                      on_epoch=True, on_step=False)
 
     def test_step(self, batch, batch_idx):
-        loss, true_labels, predicted_labels = self._shared_step(batch)
-        self.test_acc(predicted_labels, true_labels)
-        self.log("accuracy", self.test_acc)
+        metrics = self._shared_step(batch)
+        # append 'val_' to every key
+        metrics = {'test_'+k:v for k,v in metrics.items()}
+        self.log_dict(metrics,
+                      prog_bar=True, 
+                      on_epoch=True, on_step=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(self.parameters(), lr=self.learning_rate)
         return optimizer
+
+
+class D2metric(Metric):
+    def __init__(self, num_classes=2):
+        super().__init__()
+        self.add_state("targets", default=torch.Tensor([]))
+        self.add_state("logits",  default=torch.Tensor([]))
+        self.unique_y = list(range(num_classes))
+
+    def update(self, logit: torch.Tensor, target: torch.Tensor):
+        assert len(target) == len(logit), f"target.shape={target.shape} but logits.shape={logit.shape}"
+        # if setting for the first time
+        if len(self.targets)==0:
+            self.targets = target
+            self.logits = logit
+        else:
+            self.targets = torch.cat([self.targets,target], dim=0) 
+            self.logits  = torch.cat([self.logits, logit ], dim=0)
+            
+
+    def compute(self):
+        return explained_deviance(
+            self.targets.detach().cpu(), 
+            y_pred_logits=self.logits.detach().cpu(), 
+            unique_y=self.unique_y)
     
 #################################################################################################
 # PyTorch Model
@@ -150,8 +195,7 @@ class LogisticRegression(torch.nn.Module):
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
         logits = self.linear(x)
-        probas = torch.sigmoid(logits)
-        return probas
+        return logits
 
 class PyTorchMLP(torch.nn.Module):
     def __init__(self, num_features, num_classes):
@@ -171,8 +215,7 @@ class PyTorchMLP(torch.nn.Module):
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
         logits = self.all_layers(x)
-        probas = torch.sigmoid(logits)
-        return probas
+        return logits
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -225,8 +268,7 @@ class SimpleCNN(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         x = self.fc(x)
-        probas = torch.sigmoid(x)
-        return probas
+        return x
 
 #################################################################################################
 # Visualization
@@ -262,21 +304,16 @@ def viz_batch(loader, title="Training images", debug=False):
     plt.show()
     
     
+    
 ###########################################################################################
-############       Main function: Deep learning models fit on toybrains       #############
+############       MAIN function: train deep learning models on toybrains     #############
 ###########################################################################################
-'''
-> Dev log (format < Date > | <Author(s)> )  
-> - Developed: 30 May 2023 | JiHoon Kim <br>
-> - Tested and improved: 17 July 2023 | Roshan Rane <br>
-> - Tested: 28 July 2023 | JiHoon Kim <br>
-> - Updated: 18 October 2023 | JiHoon Kim | Roshan Rane <br>
-'''
 
 def fit_DL_model(dataset_path,
                 label,
                 model = SimpleCNN(num_classes=2),
-                GPUs = [1], max_epochs=10,
+                GPUs=[1], max_epochs=10,
+                batch_size=64,
                 show_batch=False, show_training_curves=True,
                 random_seed=None, debug=False):
     
@@ -284,8 +321,9 @@ def fit_DL_model(dataset_path,
     torch.set_float32_matmul_precision('medium')
     
     if debug: 
-        os.environ["CUDA_LAUNCH_BLOCKING"]=1
+        os.environ["CUDA_LAUNCH_BLOCKING"]="1"
         random_seed = 42
+        max_epochs=2 if max_epochs>2 else max_epochs
         
     if random_seed is not None:
         torch.manual_seed(random_seed) 
@@ -308,12 +346,11 @@ def fit_DL_model(dataset_path,
                     data_split_dfs=[df_train, df_val, df_test],
                     shuffles=[True,False,False],
                     data_dir=dataset_path,
-                    batch_size=64, 
+                    batch_size=batch_size, 
                     num_workers=20, transform=[])
     if show_batch or debug:
         viz_batch(val_loader, title="Validation data")
 
-    
     # load model
     lightning_model = LightningModel(model, learning_rate=0.05)
     logger = CSVLogger(save_dir="logs/", name=unique_name)
@@ -323,9 +360,9 @@ def fit_DL_model(dataset_path,
                         accelerator="gpu", devices=GPUs,
                         logger=logger) #deterministic=True
     trainer.fit(
-    model=lightning_model,
-    train_dataloaders=train_loader,
-    val_dataloaders=val_loader)
+        model=lightning_model,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader)
     
     # show training curves
     if show_training_curves:
@@ -334,7 +371,7 @@ def fit_DL_model(dataset_path,
         agg_col = "epoch"
         for i, dfg in metrics.groupby(agg_col):
             agg = dict(dfg.mean())
-            agg[agg_col] = i
+            agg[agg_col] = int(i)
             aggreg_metrics.append(agg)
         
         f, axes = plt.subplots(1,2, sharex=True, 
@@ -345,25 +382,27 @@ def fit_DL_model(dataset_path,
             ylabel="Loss", ax=axes[0],
             grid=True, legend=True, xlabel="Epoch", 
         )
-        df_metrics[["train_acc", "val_acc"]].plot(
-            ylabel="Accuracy", ax=axes[1],
+        df_metrics[["train_D2", "val_D2"]].plot(
+            ylabel=r"$D^2$", ax=axes[1],
             grid=True, legend=True, xlabel="Epoch", ylim=(0,1)
         )
         plt.show()
         
     # test model
-    train_acc = trainer.test(lightning_model, verbose=False, 
-                             dataloaders=train_loader)[0]["accuracy"] #TODO use balanced accuracy?
-    val_acc = trainer.test(lightning_model, verbose=False, 
-                           dataloaders=val_loader)[0]["accuracy"]
-    test_acc = trainer.test(lightning_model, verbose=False, 
-                            dataloaders=test_loader)[0]["accuracy"]
+    train_scores = trainer.test(lightning_model, verbose=False, 
+                             dataloaders=train_loader)[0] 
+    val_scores = trainer.test(lightning_model, verbose=False, 
+                           dataloaders=val_loader)[0]
+    test_scores = trainer.test(lightning_model, verbose=False, 
+                            dataloaders=test_loader)[0]
 
-    print(
-        f"Final accuracy on Dataset: {dataset_path} ({unique_name})\n"+
-        f"Train Acc {train_acc*100:.2f}"+
-        f" | Val Acc {val_acc*100:.2f}"+
-        f" | Test Acc {test_acc*100:.2f}"
-    )
+    print("Final accuracy on Dataset: {} ({})\n\
+Train Balanced Acc = {:.2f}% \t D2 = {:.2f}%\n\
+Val   Balanced Acc = {:.2f}% \t D2 = {:.2f}%\n\
+Test  Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
+        dataset_path, unique_name, 
+        train_scores['test_BAC']*100, train_scores['test_D2']*100,
+          val_scores['test_BAC']*100,   val_scores['test_D2']*100,
+         test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     return trainer, logger
