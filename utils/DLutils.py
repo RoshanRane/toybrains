@@ -19,6 +19,8 @@ from torchvision import datasets, transforms
 import lightning as L
 
 from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+
 # import monai
 
 # custom imports 
@@ -101,8 +103,6 @@ class LightningModel(L.LightningModule):
     def __init__(self, model, learning_rate,
                  task="binary", num_classes=2):
         '''LightningModule that receives a PyTorch model as input'''
-        # (TODO) add lr scheduler, etc.
-        # https://github.com/Lightning-AI/dl-fundamentals/tree/main/unit06-dl-tips/6.2-learning-rates
         super().__init__()
         self.learning_rate = learning_rate
         self.model = model
@@ -154,8 +154,18 @@ class LightningModel(L.LightningModule):
                       on_epoch=True, on_step=False)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        sch = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', 
+                                                         factor=0.1, patience=3)
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": sch,
+                "monitor": "val_loss",
+                "interval": "epoch", # default
+                "frequency": 1, # default
+            },
+        }
 
 
 class D2metric(Metric):
@@ -250,19 +260,19 @@ class SimpleCNN(nn.Module):
         
         # convolutional layers
         self.conv = nn.Sequential(
-            ConvBlock(in_channels=3, out_channels=32),
+            ConvBlock(in_channels=3, out_channels=16),
+            nn.Dropout(0.1),
+            ConvBlock(in_channels=16, out_channels=32),
+            nn.Dropout(0.1),
             ConvBlock(in_channels=32, out_channels=64),
-            ConvBlock(in_channels=64, out_channels=128),
         )
         
         # fully connected layers
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Dropout(0.2),
             # TODO hardcoded input size
-            nn.Linear(128 * 8 * 8, 128),
-            nn.Dropout(0.1),
-            nn.Linear(128, num_classes),
+            nn.Linear(64 * 8 * 8, 3),
+            nn.Linear(3, num_classes),
         )
 
     def forward(self, x):
@@ -353,10 +363,14 @@ def fit_DL_model(dataset_path,
 
     # load model
     lightning_model = LightningModel(model, learning_rate=0.05)
+    # configure trainer settings
     logger = CSVLogger(save_dir="logs/", name=unique_name)
-    
+    callbacks = [EarlyStopping(monitor="val_loss", mode="min", patience=6)
+        #, ModelCheckpoint(save_top_k=1, mode="min", monitor="val_loss", save_last=True)
+    ]
     # train model
-    trainer = L.Trainer(max_epochs=max_epochs,
+    trainer = L.Trainer(callbacks=callbacks,
+                        max_epochs=max_epochs,
                         accelerator="gpu", devices=GPUs,
                         logger=logger) #deterministic=True
     trainer.fit(
@@ -390,11 +404,14 @@ def fit_DL_model(dataset_path,
         
     # test model
     train_scores = trainer.test(lightning_model, verbose=False, 
-                             dataloaders=train_loader)[0] 
+                                dataloaders=train_loader,
+                                ckpt_path="best")[0] 
     val_scores = trainer.test(lightning_model, verbose=False, 
-                           dataloaders=val_loader)[0]
-    test_scores = trainer.test(lightning_model, verbose=False, 
-                            dataloaders=test_loader)[0]
+                              dataloaders=val_loader,
+                              ckpt_path="best")[0]
+    test_scores = trainer.test(lightning_model, verbose=False,
+                               dataloaders=test_loader,
+                              ckpt_path="best")[0]
 
     print("Final accuracy on Dataset: {} ({})\n\
 Train Balanced Acc = {:.2f}% \t D2 = {:.2f}%\n\

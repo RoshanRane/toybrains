@@ -40,8 +40,8 @@ def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=F
     DF_training, DF_test = train_test_split(DF, test_size=0.2, random_state=seed)
     
     if CV == None:
-        # split remaining 80% split it into 90% for training and 10% for validation
-        DF_train, DF_val = train_test_split(DF_training, test_size=0.1, random_state=seed)
+        # split remaining 80% split it into 80% for training and 20% for validation
+        DF_train, DF_val = train_test_split(DF_training, test_size=0.2, random_state=seed)
     else:
         assert CV >= 2, "CV must be at least 2"
         assert trial <= CV, "trial should be in CV number"
