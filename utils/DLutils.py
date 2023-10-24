@@ -19,6 +19,7 @@ from torchvision import datasets, transforms
 import lightning as L
 
 from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
 # import monai
@@ -322,19 +323,30 @@ def viz_batch(loader, title="Training images", debug=False):
 def fit_DL_model(dataset_path,
                 label,
                 model = SimpleCNN(num_classes=2),
-                GPUs=[1], max_epochs=10,
+                logger = CSVLogger(save_dir='logs'),
                 batch_size=64,
                 show_batch=False, show_training_curves=True,
-                random_seed=None, debug=False):
+                early_stop_patience=6,
+                random_seed=None, debug=False, 
+                trainer_args={"max_epochs":10, 
+                              "accelerator":'gpu',
+                              "devices":[1]}):
     
-    # set GPU settings
-    torch.set_float32_matmul_precision('medium')
-    
-    if debug: 
+    if debug:
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print('-'*40+f"\nTraining Deep learning model on toybrains:\n\
+        dataset_path: {dataset_path} \n\
+        model: {model.__class__.__name__}(n_params={trainable_params})\n\
+        training_args: {trainer_args}\n"+'-'*40)
         os.environ["CUDA_LAUNCH_BLOCKING"]="1"
         random_seed = 42
-        max_epochs=2 if max_epochs>2 else max_epochs
-        
+        trainer_args["max_epochs"]=2 if trainer_args["max_epochs"]>2 else trainer_args["max_epochs"]
+
+    # set GPU settings
+    torch.set_float32_matmul_precision('medium')
+    # forcefully set a random seed in debug mode
+    if random_seed is None and debug:
+        random_seed=42
     if random_seed is not None:
         torch.manual_seed(random_seed) 
         np.random.seed(random_seed)
@@ -348,6 +360,12 @@ def fit_DL_model(dataset_path,
     data_df = pd.read_csv(raw_csv_path)
     # split the dataset
     df_train, df_val, df_test = split_dataset(raw_csv_path, label, random_seed)
+    # in debug mode reduce the datasize of training data to maximum 5000 samples
+    if debug:
+        if len(df_train)>5000: df_train = df_train.iloc[:5000]
+        if len(df_val)>500: df_val = df_val.iloc[:500]
+        if len(df_test)>500: df_test = df_val.iloc[:500]
+    
     print(f"Dataset: {dataset_path} ({unique_name})\n  Training data split = {len(df_train)} \n \
   Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
     
@@ -364,15 +382,18 @@ def fit_DL_model(dataset_path,
     # load model
     lightning_model = LightningModel(model, learning_rate=0.05)
     # configure trainer settings
-    logger = CSVLogger(save_dir="logs/", name=unique_name)
-    callbacks = [EarlyStopping(monitor="val_loss", mode="min", patience=6)
-        #, ModelCheckpoint(save_top_k=1, mode="min", monitor="val_loss", save_last=True)
-    ]
+    logger.__setattr__("_name" , unique_name)
+    callbacks = [ModelCheckpoint(dirpath=logger.log_dir,
+                                 monitor="val_loss", mode="min",  
+                                 save_top_k=1, save_last=True)]
+    if early_stop_patience and not debug:
+        callbacks.append(EarlyStopping(monitor="val_loss", mode="min", 
+                                       patience=early_stop_patience))
+    
     # train model
     trainer = L.Trainer(callbacks=callbacks,
-                        max_epochs=max_epochs,
-                        accelerator="gpu", devices=GPUs,
-                        logger=logger) #deterministic=True
+                        logger=logger,
+                        **trainer_args) # deterministic=True
     trainer.fit(
         model=lightning_model,
         train_dataloaders=train_loader,
@@ -403,23 +424,15 @@ def fit_DL_model(dataset_path,
         plt.show()
         
     # test model
-    train_scores = trainer.test(lightning_model, verbose=False, 
-                                dataloaders=train_loader,
-                                ckpt_path="best")[0] 
-    val_scores = trainer.test(lightning_model, verbose=False, 
-                              dataloaders=val_loader,
-                              ckpt_path="best")[0]
     test_scores = trainer.test(lightning_model, verbose=False,
                                dataloaders=test_loader,
                               ckpt_path="best")[0]
 
-    print("Final accuracy on Dataset: {} ({})\n\
-Train Balanced Acc = {:.2f}% \t D2 = {:.2f}%\n\
-Val   Balanced Acc = {:.2f}% \t D2 = {:.2f}%\n\
-Test  Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
+    print("Test data performance with the best model:\n\
+-------------------------------------------------------\n\
+Dataset      = {} ({})\n\
+Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
         dataset_path, unique_name, 
-        train_scores['test_BAC']*100, train_scores['test_D2']*100,
-          val_scores['test_BAC']*100,   val_scores['test_D2']*100,
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     return trainer, logger
