@@ -4,7 +4,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 
 # function
 
-def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=False):
+def split_dataset(data_csv, label, CV=None, trial=0, random_seed=42, debug=False):
     '''
     generate the dataset
     
@@ -27,7 +27,13 @@ def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=F
     '''
     seed = random_seed
     # load the raw csv
-    DF = pd.read_csv(raw_csv_path)
+    
+    if isinstance(data_csv, str) and os.path.isfile(data_csv):
+        DF = pd.read_csv(data_csv)
+    elif isinstance(data_csv, pd.DataFrame):
+        DF = data_csv.copy()
+    else:
+        raise ValueError(f"data_csv provided {data_csv} is neither a pandas Dataframe nor a path to a table.")
     # define target label 
     DF['label'] = DF[label]
     #TODO hardcoded dtype change to categorical - refactor
@@ -47,6 +53,7 @@ def split_dataset(raw_csv_path, label, CV=None, trial=0, random_seed=42, debug=F
         assert trial <= CV, "trial should be in CV number"
         
         skf = StratifiedKFold(n_splits=CV, shuffle=True, random_state=seed)
+        # TODO remove hardcoded 
         if label == 'cov_age':
             n_grp = 1000
             DF_training['grp'] = pd.cut(DF_training['label'], n_grp, labels=False)

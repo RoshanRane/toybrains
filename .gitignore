@@ -10,6 +10,9 @@ results/
 *.cpython-*.pyc
 nohup.out
 **/nohup*.out
-**/logs/
+**/*log*/
 **/*.pt
 **/*.ckpt
+**/*.h5
+**/wandb
+*.swp
