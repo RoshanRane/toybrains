@@ -68,7 +68,8 @@ def get_toybrain_dataloader(
                     dataset=dataset,
                     batch_size=batch_size,
                     shuffle=shuffle,
-                    num_workers=num_workers)
+                    num_workers=num_workers,
+                    drop_last=True)
     return data_loader
     
 
@@ -167,7 +168,7 @@ class ConvBlock(nn.Module):
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        
+        self.final_act_size = 65 # weights + 1 bias
         # convolutional layers
         self.conv = nn.Sequential(
             ConvBlock(in_channels=3, out_channels=16),
@@ -181,8 +182,8 @@ class SimpleCNN(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             # TODO hardcoded input size
-            nn.Linear(64 * 8 * 8, 3),
-            nn.Linear(3, num_classes, bias=False),
+            nn.Linear(64 * 8 * 8, self.final_act_size-1),
+            nn.Linear(self.final_act_size-1, num_classes, bias=True),
         )
 
     def forward(self, x):

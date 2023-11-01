@@ -1,6 +1,5 @@
 #!/usr/bin/python3    
 # standard python packages
-# @arjun to run on CPU in dev mode do: $python3 toybrains_fit_DL.py -d -e 2 -b 4 
 import os, sys
 from glob import glob
 import numpy as np
@@ -12,6 +11,7 @@ from joblib import Parallel, delayed
 from copy import copy, deepcopy
 from tqdm.auto import tqdm
 import argparse
+from datetime import datetime
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -25,17 +25,27 @@ from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger, WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
+import logging
+# disable some unneccesary lightning warnings
+# logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.WARNING)
 # import toybrains library
-# check that Toybrains repo is available
 TOYBRAINS_DIR = '../'
-assert os.path.isdir(TOYBRAINS_DIR) and os.path.exists(TOYBRAINS_DIR+'/create_toybrains.py'), f"No toybrains repository found in {TOYBRAINS_DIR}. Download the toybrains dataset from https://github.com/RoshanRane/toybrains and save it at the relative directory path provided here with the --dir arg."
 sys.path.append(TOYBRAINS_DIR)
+
 from create_toybrains import ToyBrainsData
 from utils.DLutils import *
 
-# DEEPREPVIZ_REPO = "../../Deep-confound-control-v2/"
-# sys.path.append(DEEPREPVIZ_REPO)
-# from DeepRepVizLogger import DeepRepVizLogger
+# set GPU settings
+torch.set_float32_matmul_precision('medium')
+os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+# os.environ["TF_ENABLE_ONEDNN_OPTS"]="0"
+
+DEEPREPVIZ_REPO = "../../Deep-confound-control-v2/"
+# check that DeepRepViz repo is available and import it
+assert os.path.isdir(DEEPREPVIZ_REPO) and os.path.exists(DEEPREPVIZ_REPO+'/DeepRepViz.py'), f"No DeepRepViz repository found in {DEEPREPVIZ_REPO}. Download the repo from https://github.com/ritterlab/Deep-confound-control-v2 and add its relative path to 'DEEPREPVIZ_REPO'."
+sys.path.append(DEEPREPVIZ_REPO)
+from DeepRepViz import DeepRepViz
 
 
 ###############################################################################
@@ -136,23 +146,16 @@ class LightningModel(L.LightningModule):
 
 def fit_DL_model(dataset_path,
                 label,
-                model=SimpleCNN,
+                model_class=SimpleCNN,
                 num_classes=2,
-                logger = CSVLogger,
-                logger_args = {'save_dir':'logs'},
-                callbacks = [],
+                trainer_args=dict(max_epochs=50, accelerator='gpu',
+                                  devices=[1]),
+                additional_loggers=[],
+                additional_callbacks = [],
                 batch_size=64,
-                show_batch=False, show_training_curves=True,
                 early_stop_patience=6,
-                random_seed=None, debug=False, 
-                trainer_args={"max_epochs":10, 
-                              "accelerator":'gpu',
-                              "devices":[1]}):
+                show_batch=False, random_seed=None, debug=False):
 
-    # set GPU settings
-    torch.set_float32_matmul_precision('medium')
-    if debug:
-        os.environ["CUDA_LAUNCH_BLOCKING"]="1"
     # forcefully set a random seed in debug mode
     if random_seed is None and debug:
         random_seed=42
@@ -165,47 +168,61 @@ def fit_DL_model(dataset_path,
     # load the dataset
     unique_name = dataset_path.split('/')[-1].split('_')[-1]
     raw_csv_path = glob(f'{dataset_path}/*{unique_name}.csv')[0]
-    data_df = pd.read_csv(raw_csv_path)
+    df_data = pd.read_csv(raw_csv_path)
     # split the dataset
-    df_train, df_val, df_test = split_dataset(raw_csv_path, label, random_seed)
-    # in debug mode reduce the datasize of training data to maximum 5000 samples
-    if debug:
-        if len(df_train)>5000: df_train = df_train.iloc[:5000]
-        if len(df_val)>500: df_val = df_val.iloc[:500]
-        if len(df_test)>500: df_test = df_test.iloc[:500]
-    
+    df_train, df_val, df_test = split_dataset(df_data, label, random_seed)
     print(f"Dataset: {dataset_path} ({unique_name})\n  Training data split = {len(df_train)} \n \
   Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
     
     # generate data loaders
-    train_loader = get_toybrain_dataloader(
-                    df_train,
-                    images_path=dataset_path+'/images',
-                    batch_size=batch_size)
-    val_loader = get_toybrain_dataloader(
-                    df_val,
-                    images_path=dataset_path+'/images',
-                    shuffle=False,
-                    batch_size=batch_size)
-    test_loader = get_toybrain_dataloader(
-                    df_test,
-                    images_path=dataset_path+'/images',
-                    shuffle=False,
-                    batch_size=batch_size)
+    common_settings = dict(images_dir=dataset_path+'/images',
+                           batch_size=batch_size)
+    train_loader = get_toybrain_dataloader(df_train,
+                                           **common_settings)
+    val_loader = get_toybrain_dataloader(df_val, shuffle=False,
+                                        **common_settings)
+    test_loader = get_toybrain_dataloader(df_test, shuffle=False,
+                                          **common_settings)
     
-    if show_batch or debug:
+    if show_batch:
         viz_batch(val_loader, title="Validation data")
+    
+    
+    # create a dataloader for DeepRepViz with the whole data and no shuffle
+    split_colname = 'datasplit'
+    ID_col = 'subjectID'
+    # add the split info too
+    df_train[split_colname] = 'train'
+    df_val[split_colname]   = 'val'
+    df_test[split_colname]  = 'test'
+    df_data = pd.concat([df_train, df_val, df_test])
+
+    drv_loader_kwargs = dict(
+                    img_dir=dataset_path+'/images',
+                    img_names=df_data[ID_col].values,
+                    labels=df_data[label].values,
+                    transform=transforms.ToTensor())
+    
 
     # load model
-    model = model(num_classes=num_classes)
+    model = model_class(num_classes=num_classes)
     lightning_model = LightningModel(model, learning_rate=0.05, 
                                      num_classes=num_classes)
-    # configure trainer settings
-    logger = logger(version=unique_name, **logger_args)
-    # callbacks.append(ModelCheckpoint(dirpath=logger.log_dir,
-    #                          monitor="val_loss", mode="min",  
-    #                          save_top_k=1, save_last=True))
-    if early_stop_patience and not debug:
+    # configure TensorBoardLogger as the main logger 
+    logger = TensorBoardLogger(save_dir='log', name=f'toybrains-{unique_name}') 
+    if additional_loggers: # plus, any additional user provided loggers
+        logger = [logger] + additional_loggers
+    
+    ## Init DeepRepViz callback            
+    drv = DeepRepViz(conf_table=df_data,
+                 ID_col=ID_col, label_col=label, split_col=split_colname,
+                 dataloader_class=ToyBrainsDataloader, 
+                 dataloader_kwargs=drv_loader_kwargs,
+                 hook_layer=-1,
+                 debug=False)
+    callbacks = additional_callbacks + [drv]
+    # add any other callbacks
+    if early_stop_patience:
         callbacks.append(EarlyStopping(monitor="val_loss", mode="min", 
                                        patience=early_stop_patience))
     
@@ -217,35 +234,11 @@ def fit_DL_model(dataset_path,
         model=lightning_model,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader)
-    
-    # show training curves
-    if show_training_curves and not isinstance(logger, WandbLogger):
-        metrics = pd.read_csv(f"{logger.log_dir}/metrics.csv")
-        aggreg_metrics = []
-        agg_col = "epoch"
-        for i, dfg in metrics.groupby(agg_col):
-            agg = dict(dfg.mean())
-            agg[agg_col] = int(i)
-            aggreg_metrics.append(agg)
-        
-        f, axes = plt.subplots(1,2, sharex=True, 
-                               constrained_layout=True, 
-                               figsize=(7,3))
-        df_metrics = pd.DataFrame(aggreg_metrics)
-        df_metrics[["train_loss", "val_loss"]].plot(
-            ylabel="Loss", ax=axes[0],
-            grid=True, legend=True, xlabel="Epoch", 
-        )
-        df_metrics[["train_D2", "val_D2"]].plot(
-            ylabel=r"$D^2$", ax=axes[1],
-            grid=True, legend=True, xlabel="Epoch", ylim=(0,1)
-        )
-        plt.show()
         
     # test model
     test_scores = trainer.test(lightning_model, verbose=False,
                                dataloaders=test_loader,
-                              ckpt_path="best")[0]
+                               ckpt_path="best")[0]
 
     print("Test data performance with the best model:\n\
 -------------------------------------------------------\n\
@@ -253,6 +246,9 @@ Dataset      = {} ({})\n\
 Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
         dataset_path, unique_name, 
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
+    
+    # create and save the DeepRepViz v1 table 
+    drv.convert_log_to_v1_table(unique_name=f"{model_class.__name__}")
     
     return trainer, logger
 
@@ -263,7 +259,6 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
 
 
 if __name__ == "__main__":
-    
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='dataset/toybrains_n10000', type=str,
                         help='The relative pathway of the generated dataset in the toybrains repo')
@@ -281,23 +276,26 @@ if __name__ == "__main__":
     DATA_CSV = DATA_CSV[0]
     # use whatever is available (CPU/GPU) if args.gpu is None  
     accelerator= "gpu" if args.gpus is not None else "auto"
-    devices=args.gpus if args.gpus is not None else [2]
+    devices=args.gpus if args.gpus is not None else [1]
         
-    DL_MODEL = SimpleCNN(num_classes=2)
-    logger = WandbLogger#DeepRepVizLogger(save_dir='./logs/')
-    logger_args = dict(save_dir='log_wandb', project='toybrains', log_model="all")
-    callbacks = []
+    DL_MODEL = SimpleCNN
+    num_classes = 2
+    
+    start_time = datetime.now()
     
     trainer, logger = fit_DL_model(
                             DATA_DIR,
                             label='lbl_lesion',
-                            model=DL_MODEL,
+                            model_class=DL_MODEL, num_classes=num_classes,
                             debug=args.debug, 
-                            callbacks=callbacks,
-                            logger=WandbLogger,
-                            logger_args=logger_args,
-                            show_training_curves=False,
+                            additional_callbacks=[],
+                            additional_loggers=[],
                             trainer_args=dict(
                                 max_epochs=args.max_epochs, 
                                 accelerator=accelerator,
                                 devices=devices))
+    
+    # runtime
+    total_time = datetime.now() - start_time
+    minutes, seconds = divmod(total_time.total_seconds(), 60)
+    print(f"Total runtime: {int(minutes)} minutes {int(seconds)} seconds")
