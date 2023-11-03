@@ -17,23 +17,21 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
-from torchmetrics import Metric
 import torchvision, torchmetrics
-from torchvision import datasets, transforms
+from torchvision import transforms
 import lightning as L
-from lightning.pytorch.loggers import TensorBoardLogger, CSVLogger, WandbLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
 import logging
 # disable some unneccesary lightning warnings
-# logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
 logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.WARNING)
+
 # import toybrains library
 TOYBRAINS_DIR = '../'
 sys.path.append(TOYBRAINS_DIR)
-
-from create_toybrains import ToyBrainsData
 from utils.DLutils import *
 
 # set GPU settings
