@@ -166,9 +166,9 @@ class ConvBlock(nn.Module):
         return x
     
 class SimpleCNN(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, final_act_size=64):
         super().__init__()
-        self.final_act_size = 65 # weights + 1 bias
+        self.final_act_size = final_act_size # weights + 1 bias
         # convolutional layers
         self.conv = nn.Sequential(
             ConvBlock(in_channels=3, out_channels=16),

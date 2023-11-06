@@ -44,6 +44,7 @@ DEEPREPVIZ_REPO = "../../Deep-confound-control-v2/"
 assert os.path.isdir(DEEPREPVIZ_REPO) and os.path.exists(DEEPREPVIZ_REPO+'/DeepRepViz.py'), f"No DeepRepViz repository found in {DEEPREPVIZ_REPO}. Download the repo from https://github.com/ritterlab/Deep-confound-control-v2 and add its relative path to 'DEEPREPVIZ_REPO'."
 sys.path.append(DEEPREPVIZ_REPO)
 from DeepRepViz import DeepRepViz
+from DeepRepVizBackend import *
 
 
 ###############################################################################
@@ -54,7 +55,7 @@ from DeepRepViz import DeepRepViz
 class LightningModel(L.LightningModule):
     
     def __init__(self, model, learning_rate,
-                 task="binary", num_classes=2):
+                 task="binary", num_classes=1):
         '''LightningModule that receives a PyTorch model as input'''
         super().__init__()
         self.learning_rate = learning_rate
@@ -145,14 +146,15 @@ class LightningModel(L.LightningModule):
 def fit_DL_model(dataset_path,
                 label,
                 model_class=SimpleCNN,
-                num_classes=2,
+                model_kwargs=dict(num_classes=2, final_act_size=65),
                 trainer_args=dict(max_epochs=50, accelerator='gpu',
                                   devices=[1]),
                 additional_loggers=[],
                 additional_callbacks = [],
                 batch_size=64,
                 early_stop_patience=6,
-                show_batch=False, random_seed=None, debug=False):
+                show_batch=False, random_seed=None, debug=False,
+                unique_name=''):
 
     # forcefully set a random seed in debug mode
     if random_seed is None and debug:
@@ -164,12 +166,12 @@ def fit_DL_model(dataset_path,
         L.seed_everything(random_seed)
     
     # load the dataset
-    unique_name = dataset_path.split('/')[-1].split('_')[-1]
-    raw_csv_path = glob(f'{dataset_path}/*{unique_name}.csv')[0]
+    dataset_unique_name = dataset_path.split('/')[-1].split('_')[-1]
+    raw_csv_path = glob(f'{dataset_path}/*{dataset_unique_name}.csv')[0]
     df_data = pd.read_csv(raw_csv_path)
     # split the dataset
     df_train, df_val, df_test = split_dataset(df_data, label, random_seed)
-    print(f"Dataset: {dataset_path} ({unique_name})\n  Training data split = {len(df_train)} \n \
+    print(f"Dataset: {dataset_path} ({dataset_unique_name})\n  Training data split = {len(df_train)} \n \
   Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
     
     # generate data loaders
@@ -203,11 +205,14 @@ def fit_DL_model(dataset_path,
     
 
     # load model
-    model = model_class(num_classes=num_classes)
+    model = model_class(**model_kwargs)
     lightning_model = LightningModel(model, learning_rate=0.05, 
-                                     num_classes=num_classes)
+                                     num_classes=model_kwargs['num_classes'])
+
     # configure TensorBoardLogger as the main logger 
-    logger = TensorBoardLogger(save_dir='log', name=f'toybrains-{unique_name}') 
+    # create a unique name for the logs based on the dataset, model and user provided suffix
+    unique_name = f'toybrains-{dataset_unique_name}_{model_class.__name__}' + unique_name
+    logger = TensorBoardLogger(save_dir='log', name=unique_name) 
     if additional_loggers: # plus, any additional user provided loggers
         logger = [logger] + additional_loggers
     
@@ -242,11 +247,11 @@ def fit_DL_model(dataset_path,
 -------------------------------------------------------\n\
 Dataset      = {} ({})\n\
 Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
-        dataset_path, unique_name, 
+        dataset_path, dataset_unique_name, 
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
-    drv.convert_log_to_v1_table(unique_name=f"{model_class.__name__}")
+    drv.convert_log_to_v1_table(unique_name=unique_name)
     
     return trainer, logger
 
@@ -258,11 +263,13 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', default='dataset/toybrains_n10000', type=str,
+    parser.add_argument('--data_dir', default='dataset/toybrains_n10000_highsignal', type=str,
                         help='The relative pathway of the generated dataset in the toybrains repo')
     parser.add_argument('-e', '--max_epochs', default=50, type=int)
     parser.add_argument('-b', '--batch_size', default=128, type=int)
     parser.add_argument('--gpus', nargs='+', default=None, type=int)
+    parser.add_argument('--final_act_size', default=64, type=int)
+    parser.add_argument('--unique_name', default='', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     # parser.add_argument('-j','--n_jobs', default=20, type=int)
     args = parser.parse_args()
@@ -277,21 +284,22 @@ if __name__ == "__main__":
     devices=args.gpus if args.gpus is not None else [1]
         
     DL_MODEL = SimpleCNN
-    num_classes = 2
+    model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
     
     start_time = datetime.now()
     
     trainer, logger = fit_DL_model(
                             DATA_DIR,
                             label='lbl_lesion',
-                            model_class=DL_MODEL, num_classes=num_classes,
+                            model_class=DL_MODEL, model_kwargs=model_kwargs,
                             debug=args.debug, 
                             additional_callbacks=[],
                             additional_loggers=[],
                             trainer_args=dict(
                                 max_epochs=args.max_epochs, 
                                 accelerator=accelerator,
-                                devices=devices))
+                                devices=devices),
+                            unique_name=args.unique_name)
     
     # runtime
     total_time = datetime.now() - start_time
