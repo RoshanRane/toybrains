@@ -70,6 +70,7 @@ def get_toybrain_dataloader(
                     shuffle=shuffle,
                     num_workers=num_workers,
                     drop_last=True)
+    
     return data_loader
     
 
@@ -182,8 +183,8 @@ class SimpleCNN(nn.Module):
         self.fc = nn.Sequential(
             nn.Flatten(),
             # TODO hardcoded input size
-            nn.Linear(64 * 8 * 8, self.final_act_size-1),
-            nn.Linear(self.final_act_size-1, num_classes, bias=True),
+            nn.Linear(64 * 8 * 8, self.final_act_size, bias=True),
+            nn.Linear(self.final_act_size, num_classes, bias=True),
         )
 
     def forward(self, x):

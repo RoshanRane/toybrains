@@ -24,7 +24,7 @@ from utils.dataset import split_dataset
 from utils.baseline import run_lreg
 
 import graphviz
-from causalgraphicalmodels import CausalGraphicalModel
+# from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
 
 # from utils.vizutils import plot_col_dists
 
@@ -256,9 +256,9 @@ class ToyBrainsData:
             data.append([var_name, str(var.states),  str(var.weights)])
         print (tabulate(data, headers=["Name", "States", "Weights"]))
                 
-    def get_config_causal_graph(self): 
-        return CausalGraphicalModel(nodes=self.CGM_nodes, 
-                                    edges=self.CGM_edges)
+    # def get_config_causal_graph(self): 
+    #     return CausalGraphicalModel(nodes=self.CGM_nodes, 
+    #                                 edges=self.CGM_edges)
 
     def show_current_config(self, 
                             show_dag_probas=True, 
