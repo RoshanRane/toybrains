@@ -155,7 +155,7 @@ def fit_DL_model(dataset_path,
                                   devices=[1]),
                 additional_loggers=[],
                 additional_callbacks = [],
-                batch_size=64,
+                batch_size=64, num_workers=8,
                 early_stop_patience=6,
                 show_batch=False, random_seed=None, debug=False,
                 unique_name=''):
@@ -181,7 +181,7 @@ def fit_DL_model(dataset_path,
     # generate data loaders
     common_settings = dict(images_dir=dataset_path+'/images',
                            batch_size=batch_size, 
-                           num_workers=16)
+                           num_workers=num_workers)
     train_loader = get_toybrain_dataloader(df_train,
                                            **common_settings)
     val_loader = get_toybrain_dataloader(df_val, shuffle=False,
@@ -262,8 +262,12 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
-    DeepRepVizBackend()
-    drv.convert_log_to_v1_table(unique_name=unique_name)
+    drv_backend = DeepRepVizBackend(
+                  conf_table=df_data,
+                  ID_col=ID_col, label_col=label)
+    log_dir = trainer.log_dir + '/deeprepvizlog/'
+    drv_backend.load_log(log_dir)
+    drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
     
     return trainer, logger
 
@@ -300,7 +304,8 @@ if __name__ == "__main__":
     
     unique_name = 'debug-mode' if args.debug else args.unique_name
     max_epochs = 3 if args.debug else args.max_epochs
-
+    num_workers = 0 if args.debug else 16
+    batch_size = args.batch_size
     start_time = datetime.now()
     
     trainer, logger = fit_DL_model(
@@ -310,6 +315,7 @@ if __name__ == "__main__":
                             debug=args.debug, 
                             additional_callbacks=[],
                             additional_loggers=[],
+                            batch_size=batch_size, num_workers=num_workers,
                             trainer_args=dict(
                                 max_epochs=max_epochs, 
                                 accelerator=accelerator,
