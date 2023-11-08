@@ -1,6 +1,6 @@
 ## Instructions for @arjun
 
-- to run on CPU in dev mode     : `$python3 fit_DL_model.py -d -e 2 --data_dir dataset/toybrains_n10000`
+- to run on CPU in dev mode     : `$python3 fit_DL_model.py -d --data_dir dataset/toybrains_n10000`
     - This runs for me within 1 minute on GPU. 
     - Try different batch sizes with `-b` flag. Currently it is 128 but for running on the CPU, lower values like 8,16 or 32 might be relatively faster.
     - The deeprepvizlog is generated under `log/toybrains-[datasetname]/version_[latest]/deeprepvizlog`
@@ -14,6 +14,6 @@
     - Now the representation space should look the same between v1 and tensorboard since in the v1 table I use PCA. In the bottom left of tensorboard you can also use other complex dimensionality reduction methods such as TSNE and UMAP on the go.
     - Currently I don't provide all the variables to the tensorboard that I provide to DeepRepViz v1 table. I can do it if required.
 
-- to run on a different dataset : `$python3 fit_DL_model.py -d -e 2 --data_dir dataset/toybrains_n10000_lowsignal`
+- to run on a different dataset : `$python3 fit_DL_model.py -d --data_dir dataset/toybrains_n10000_lowsignal`
     - you can generate additional datasets with the ../create_toybrains.py. Check the 0_tutorial.ipynb for guidance
     

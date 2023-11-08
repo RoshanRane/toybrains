@@ -1,6 +1,7 @@
 #!/usr/bin/python3    
 # standard python packages
 import os, sys
+from os.path import dirname, abspath, join
 from glob import glob
 import numpy as np
 import pandas as pd
@@ -30,8 +31,10 @@ logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARN
 logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.WARNING)
 
 # import toybrains library
-TOYBRAINS_DIR = '../'
-sys.path.append(TOYBRAINS_DIR)
+# allows users to run this script from anywhere
+TOYBRAINS_DIR = abspath(join(dirname(__file__), '../'))
+if TOYBRAINS_DIR not in sys.path:
+    sys.path.append(TOYBRAINS_DIR)
 from utils.DLutils import *
 
 # set GPU settings
@@ -39,12 +42,13 @@ torch.set_float32_matmul_precision('medium')
 os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 # os.environ["TF_ENABLE_ONEDNN_OPTS"]="0"
 
-DEEPREPVIZ_REPO = "../../Deep-confound-control-v2/"
+DEEPREPVIZ_REPO = abspath(join(dirname(__file__), "../../Deep-confound-control-v2/")) 
 # check that DeepRepViz repo is available and import it
 assert os.path.isdir(DEEPREPVIZ_REPO) and os.path.exists(DEEPREPVIZ_REPO+'/DeepRepViz.py'), f"No DeepRepViz repository found in {DEEPREPVIZ_REPO}. Download the repo from https://github.com/ritterlab/Deep-confound-control-v2 and add its relative path to 'DEEPREPVIZ_REPO'."
-sys.path.append(DEEPREPVIZ_REPO)
+if DEEPREPVIZ_REPO not in sys.path:
+    sys.path.append(DEEPREPVIZ_REPO)
 from DeepRepViz import DeepRepViz
-from DeepRepVizBackend import *
+from DeepRepVizBackend import DeepRepVizBackend
 
 
 ###############################################################################
@@ -176,7 +180,8 @@ def fit_DL_model(dataset_path,
     
     # generate data loaders
     common_settings = dict(images_dir=dataset_path+'/images',
-                           batch_size=batch_size)
+                           batch_size=batch_size, 
+                           num_workers=16)
     train_loader = get_toybrain_dataloader(df_train,
                                            **common_settings)
     val_loader = get_toybrain_dataloader(df_val, shuffle=False,
@@ -196,13 +201,22 @@ def fit_DL_model(dataset_path,
     df_val[split_colname]   = 'val'
     df_test[split_colname]  = 'test'
     df_data = pd.concat([df_train, df_val, df_test])
+    IDs = df_data[ID_col].values
+    expected_labels = df_data[label].values
+    datasplits = df_data[split_colname].values
 
     drv_loader_kwargs = dict(
                     img_dir=dataset_path+'/images',
-                    img_names=df_data[ID_col].values,
-                    labels=df_data[label].values,
+                    img_names=IDs,
+                    labels=expected_labels,
                     transform=transforms.ToTensor())
     
+    deeprepviz_kwargs = dict(
+                    dataloader_class=ToyBrainsDataloader, 
+                    dataloader_kwargs=drv_loader_kwargs,
+                    expected_IDs=IDs, expected_labels=expected_labels, datasplits=datasplits,
+                    hook_layer=-1,
+                    debug=False)
 
     # load model
     model = model_class(**model_kwargs)
@@ -217,12 +231,7 @@ def fit_DL_model(dataset_path,
         logger = [logger] + additional_loggers
     
     ## Init DeepRepViz callback            
-    drv = DeepRepViz(conf_table=df_data,
-                 ID_col=ID_col, label_col=label, split_col=split_colname,
-                 dataloader_class=ToyBrainsDataloader, 
-                 dataloader_kwargs=drv_loader_kwargs,
-                 hook_layer=-1,
-                 debug=False)
+    drv = DeepRepViz(**deeprepviz_kwargs)
     callbacks = additional_callbacks + [drv]
     # add any other callbacks
     if early_stop_patience:
@@ -232,6 +241,8 @@ def fit_DL_model(dataset_path,
     # train model
     trainer = L.Trainer(callbacks=callbacks,
                         logger=logger,
+                        overfit_batches = 5 if debug else 0,
+                        log_every_n_steps= 2 if debug else 50,
                         **trainer_args) # deterministic=True
     trainer.fit(
         model=lightning_model,
@@ -251,6 +262,7 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
+    DeepRepVizBackend()
     drv.convert_log_to_v1_table(unique_name=unique_name)
     
     return trainer, logger
@@ -269,7 +281,7 @@ if __name__ == "__main__":
     parser.add_argument('-b', '--batch_size', default=128, type=int)
     parser.add_argument('--gpus', nargs='+', default=None, type=int)
     parser.add_argument('--final_act_size', default=64, type=int)
-    parser.add_argument('--unique_name', default='', type=str)
+    parser.add_argument('-n', '--unique_name', default='', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     # parser.add_argument('-j','--n_jobs', default=20, type=int)
     args = parser.parse_args()
@@ -286,6 +298,9 @@ if __name__ == "__main__":
     DL_MODEL = SimpleCNN
     model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
     
+    unique_name = 'debug-mode' if args.debug else args.unique_name
+    max_epochs = 3 if args.debug else args.max_epochs
+
     start_time = datetime.now()
     
     trainer, logger = fit_DL_model(
@@ -296,10 +311,10 @@ if __name__ == "__main__":
                             additional_callbacks=[],
                             additional_loggers=[],
                             trainer_args=dict(
-                                max_epochs=args.max_epochs, 
+                                max_epochs=max_epochs, 
                                 accelerator=accelerator,
                                 devices=devices),
-                            unique_name=args.unique_name)
+                            unique_name=unique_name)
     
     # runtime
     total_time = datetime.now() - start_time
