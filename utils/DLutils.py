@@ -54,7 +54,7 @@ def get_toybrain_dataloader(
                         images_dir="toybrains/images", 
                         batch_size=16, 
                         shuffle=True, 
-                        num_workers=30, transform=[],
+                        num_workers=0, transform=[],
                         ):
     ''' Creates pytorch dataloader of the ToyBrainsDataloader'''
     dataset = ToyBrainsDataloader(
@@ -69,6 +69,7 @@ def get_toybrain_dataloader(
                     batch_size=batch_size,
                     shuffle=shuffle,
                     num_workers=num_workers,
+                    # persistent_workers=True,
                     drop_last=True)
     
     return data_loader
