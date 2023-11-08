@@ -297,7 +297,7 @@ if __name__ == "__main__":
     DATA_CSV = DATA_CSV[0]
     # use whatever is available (CPU/GPU) if args.gpu is None  
     accelerator= "gpu" if args.gpus is not None else "auto"
-    devices=args.gpus if args.gpus is not None else [1]
+    devices=args.gpus if args.gpus is not None else 1
         
     DL_MODEL = SimpleCNN
     model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
