@@ -155,7 +155,7 @@ def fit_DL_model(dataset_path,
                                   devices=[1]),
                 additional_loggers=[],
                 additional_callbacks = [],
-                batch_size=64, num_workers=8,
+                batch_size=64, num_workers=0,
                 early_stop_patience=6,
                 show_batch=False, random_seed=None, debug=False,
                 unique_name=''):
