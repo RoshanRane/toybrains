@@ -27,10 +27,10 @@ RULES_COV_TO_GEN = {
     ## (3) X --> y: `lbl_lesion is True -> Volume of mid-right lesion is higher`
     'lbl_lesion':{
         True:{ 
-            'shape-midr_curv'    :dict(amt=(15,15,15,3,2,2,1,1,1)), 
+            'shape-midr_curv'    :dict(amt=(1,1,1,2,2,3,15,15,15)), 
             'shape-midr_vol-rad' :dict(amt=(1,2,10,30))},
         False:{ 
-            'shape-midr_curv'    :dict(amt=(1,1,1,2,2,3,15,15,15)), 
+            'shape-midr_curv'    :dict(amt=(15,15,15,3,2,2,1,1,1)), 
             'shape-midr_vol-rad' :dict(amt=(30,10,2,1))},
     },
 }

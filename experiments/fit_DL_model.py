@@ -304,7 +304,7 @@ if __name__ == "__main__":
     
     unique_name = 'debug-mode' if args.debug else args.unique_name
     max_epochs = 3 if args.debug else args.max_epochs
-    num_workers = 0 if args.debug else 16
+    num_workers = 8 if args.debug else os.cpu_count()
     batch_size = args.batch_size
     start_time = datetime.now()
     
