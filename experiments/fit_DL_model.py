@@ -155,7 +155,7 @@ def fit_DL_model(dataset_path,
                                   devices=[1]),
                 additional_loggers=[],
                 additional_callbacks = [],
-                batch_size=64, num_workers=0,
+                batch_size=4, num_workers=0,
                 early_stop_patience=6,
                 show_batch=False, random_seed=None, debug=False,
                 unique_name=''):
@@ -304,7 +304,7 @@ if __name__ == "__main__":
     
     unique_name = 'debug-mode' if args.debug else args.unique_name
     max_epochs = 3 if args.debug else args.max_epochs
-    num_workers = 8 if args.debug else os.cpu_count()
+    num_workers = 0 if args.debug else os.cpu_count()
     batch_size = args.batch_size
     start_time = datetime.now()
     
