@@ -1,6 +1,5 @@
 .ipynb_checkpoints/
 *_checkpoint*
-toybrains/
 dataset/
 results/
 **/images/*.jpg
@@ -16,3 +15,4 @@ nohup.out
 **/*.h5
 **/wandb
 *.swp
+configs/lbl*.py

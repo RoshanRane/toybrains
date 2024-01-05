@@ -1,4 +1,4 @@
-import os, shutil
+import os, shutil, sys
 from glob import glob
 import numpy as np
 import random
@@ -95,7 +95,7 @@ with n={self.k} states {self.states} and weights {self.weights}")
 class ToyBrainsData:
     
     def __init__(self,  
-                 config="configs.lbl1cov1", 
+                 config=None, 
                  out_dir="dataset/toybrains", 
                  img_size=64, seed=None, 
                  debug=False):
@@ -117,7 +117,12 @@ class ToyBrainsData:
         self._setup_genvars_covars()
         
         # Import the covariates and covariates-to-image-attribute relationships
-        self._load_config(config)
+        if config is not None:
+            self._load_config(config)
+        else:
+            self.COVARS = {}
+            self.RULES_COV_TO_GEN = {}
+            print("[WARN] No config file provided.")
             
         self._init_df()
         # store a dict of results tables (run.csv) on the dataset
@@ -138,7 +143,10 @@ class ToyBrainsData:
     def _load_config(self, config_file):
         # if user provided '.py' in the config filename argument then remove it
         if config_file[-3:]=='.py': config_file = config_file[:-3]
-        config = importlib.import_module(config_file)
+        config_dir = os.path.dirname(os.path.abspath(config_file+'.py'))
+        if config_dir not in sys.path:
+            sys.path.insert(0, config_dir)
+        config = importlib.import_module(config_file.replace('/','.'))
         assert hasattr(config, 'COVARS')
         self.COVARS = {cov: PROB_VAR(name=cov, **states) for cov, states in config.COVARS.items()}
         assert hasattr(config, 'RULES_COV_TO_GEN')
@@ -480,7 +488,6 @@ class ToyBrainsData:
         
         
         
-        
     def generate_dataset_table(self, n_samples, outdir_suffix='n'):
         self._init_df()
         
@@ -489,7 +496,7 @@ class ToyBrainsData:
             for name, var in self.GENVARS.items():
                 print(f"{name} {' '*(25-len(name))} {var.states}")
             
-        print("Sampling n={} toybrain image settings".format(n_samples))
+        print("Sampling image gen. attributes for n={} toybrain samples".format(n_samples))
         
         for subID in tqdm(range(n_samples)):
             # first reset all generative image attributes to have uniform distribution
@@ -751,13 +758,16 @@ self.load_generated_dataset()"
             y = data_split[label].values
             data.append([X, y])
         # display(data)
-        
+                
         if debug: 
+            print(f'Features: {feature_set_name}')
             print(f'Input features: {data[0][0].columns.tolist()}')
             print(f'Output label  : {label}')
 
         # run logistic regression and linear regression for tabular dataset
-        results_dict, model_config = run_lreg(data)
+        compute_shap = feature_set_name in ["attr_superset", "attr_all"]
+        results_dict, model_config = run_lreg(data, 
+                                              compute_shap=compute_shap)
 
         if debug:
             print(f"Train metric: {results_dict['train_metric']:>8.4f} "
@@ -803,106 +813,44 @@ self.load_generated_dataset()"
         features_dict = {}
         for f_type in feature_types:
             if f_type == "attr_subsets":
-                # first add all attributes as a feature
                 features_dict.update({"attr_all": all_attr_cols})
+                superset = []
                 for subset in attr_subsets:
                     subset_name = ", ".join(subset)
                     features_dict.update({f"attr_{subset_name}": subset})
+
+                    superset.extend(subset)
                     # also add each attribute individually
                     # if len(subset)>1:
                     #     for attr in subset:
-                    #         features_dict.update({f"attr_{attr}": [attr]})
+                    #         features_dict.update({attr_{attr}: [attr]})
+                # finally add the superset of all attributes subsets as one feature
+                superset = list(set(superset))
+                if superset not in cov_subsets:
+                    features_dict.update({"attr_superset": superset})
+                features_dict.update({"attr_superset": list(set(superset))})
+            
                         
             elif f_type == "cov_subsets":
                 cov_cols = [cov for cov in all_cov_cols if lbl!=cov]
                 # first add all attributes as a feature
                 if len(cov_cols)>1: 
                     features_dict.update({"cov_all": cov_cols})
-                    
+                superset = []
                 for subset in cov_subsets:
                     subset_name = ", ".join(subset)
                     features_dict.update({subset_name: subset})
+                    superset.extend(subset)
                     # also add each attribute individually
                     # if len(subset)>1:
                     #     for cov in subset:
                     #         features_dict.update({cov: [cov]})
+                superset = list(set(superset))
+                if superset not in cov_subsets:
+                    features_dict.update({"cov_superset": superset})
             else:
                 raise ValueError(f"{f_type} is an invalid feature_type. Valid input features for the baseline modelling are ['attr_subsets', 'cov_subsets']. See doc string for more info on what each tag means.")
         return features_dict
-    
-
-    
-    # visualization
-    def viz_baseline_results(self, run_results):
-        ''' vizualization output of baseline models
-        '''
-        if not isinstance(run_results, list): run_results = [run_results]
-        dfs = []
-        for run in run_results:
-            if isinstance(run, pd.DataFrame):
-                dfs.append(run.copy())
-            elif isinstance(run, str) and os.path.exists(run):
-                dfs.append(pd.read_csv(run))
-            else:
-                raise ValueError(f"{run} is neither a path to the results csv nor a pandas dataframe")
-        viz_df = pd.concat(dfs, ignore_index=True)
-        
-        x="$R2$ / Pseudo-$R2$ (%) on test data"
-        y="Predicted Output"
-        row="Output type"
-        col="Dataset"
-        hue="Input features"
-        viz_df = viz_df.rename(columns={'test_metric':x, 'out':y, 
-                                        'inp':hue, 'dataset':col})
-        # separate covariates and labels
-        map_out_type = {'cov':'Covariates','lbl':'Label'}
-        viz_df[row] = viz_df[y].apply(lambda x: x.split('_')[0])
-        # adjust the hue for the legend
-        viz_df[hue] = viz_df[hue].apply(lambda x: x.replace(', ',',\n'))
-        unique_inps = viz_df[hue].sort_values().unique()
-        unique_cols = viz_df[col].sort_values().unique()
-        unique_y    = viz_df[y].sort_values().unique()
-        # use a different color set for attrs and lbls and conf in inputs
-        palette_attr = sns.color_palette("mako", len(unique_inps))
-        palette_covs = sns.color_palette("husl", len(unique_inps))
-        palette = {}
-        m,n=0,0
-        for cat in unique_inps:
-            if cat[:5]=='attr_':
-                palette.update({cat:palette_attr[m]})
-                m+=1
-            else:
-                palette.update({cat:palette_covs[n]})
-                n+=1
-        
-        height = 1+len(unique_y)//2
-        g = sns.catplot(data=viz_df, kind='bar',
-                        col=col, row=row,
-                        # show labels before covariates
-                        row_order=['lbl','cov'], 
-                        x=x, y=y, hue=hue, 
-                        palette=palette, #hue_order=hue_order, 
-                        errorbar=('ci', 95), 
-                        legend=True, legend_out=True,
-                        sharey='row', height=height, aspect=1.7)
-        
-        # adjust subplot titles
-        g.set_titles("{col_var}: {col_name}") 
-        for i, ax in enumerate(g.axes.ravel()):
-            if i==0:
-                title = ax.get_title()
-            elif i<len(unique_cols): 
-                ax.set_title(ax.get_title().replace(title,'.. '))
-            else: 
-                ax.set_title('')
-        # adjust legend
-        g._legend.set_frame_on(True)
-        # set custom x-axis tick positions and labels
-        g.set(xticks=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-              xticklabels = ['0%', '20%', '40%', '60%', '80%', '100%']) 
-        plt.show()
-    # plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
-
     
     # summary
     def _show_baseline_results(self, 
