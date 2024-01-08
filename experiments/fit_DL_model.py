@@ -302,8 +302,8 @@ if __name__ == "__main__":
     DL_MODEL = SimpleCNN
     model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
     
-    unique_name = 'debug-mode' if args.debug else args.unique_name
-    max_epochs = 3 if args.debug else args.max_epochs
+    unique_name = 'debugmode' if args.debug else args.unique_name
+    max_epochs = 2 if args.debug else args.max_epochs
     num_workers = 8 if args.debug else os.cpu_count()
     batch_size = args.batch_size
     start_time = datetime.now()
