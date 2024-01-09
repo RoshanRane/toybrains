@@ -349,6 +349,7 @@ def viz_baseline_results_shap(df_results,
     plt.show()
 
 
+#############################################   Backend   #############################################
 def viz_rep_metrics(metrics_scores, title=''):
     n_cols = 3
     n_rows = int(np.ceil(len(metrics_scores)/n_cols))
@@ -371,3 +372,41 @@ def viz_rep_metrics(metrics_scores, title=''):
 
     plt.tight_layout()
     plt.show()
+
+
+def load_results_from_logdir(logsdir, 
+                             best_ckpt_by='loss', best_ckpt_metric_should_be='min'):
+    '''Load all DeepRepViz log/checkpoints present in the directory'''
+    deeprepvizlog = {}
+    assert os.path.isdir(logsdir)
+
+    # (1) go through all checkpoints and find the best checkpoint
+    best_ckpt_idx = -1
+    best_ckpt_score = np.inf if best_ckpt_metric_should_be=='min' else 0
+    for i, ckpt_dir in enumerate(sorted(glob(logsdir+'/*/*/'))):
+        ckpt_name = os.path.basename(os.path.normpath(ckpt_dir))
+        # (1) read the metadata.tsv columns
+        metadata = pd.read_csv(ckpt_dir+'metadata.tsv', sep='\t')
+        print(metadata.columns)
+        # if "IDs" not in deeprepvizlog:
+        #     deeprepvizlog["IDs"]    = metadata["IDs"].values
+        #     deeprepvizlog["labels"] = metadata["labels"].values
+        ckpt_values.update({col:metadata[col].values for col in metadata if col not in ["IDs","labels"]})
+        # (3) load metrics
+        with open(ckpt_dir+'metametadata.json') as fp:
+            metametadata = json.load(fp)
+            ckpt_values.update(metametadata)
+            score = metametadata['metrics'][best_ckpt_by]
+            if (best_ckpt_metric_should_be=='min' and score<best_ckpt_score) or \
+                    (best_ckpt_metric_should_be=='max' and score>best_ckpt_score):
+                best_ckpt_score = score
+                best_ckpt_idx = i 
+                
+    
+    deeprepvizlog['best_ckpt_idx']=best_ckpt_idx
+    deeprepvizlog['checkpoints']=checkpoints
+
+    # if shortname=='': 
+    #     logsdir_folder = dirname(dirname(normpath(logsdir)))
+    #     shortname = logsdir_folder if 'deeprepvizlog' not in logsdir_folder else logsdir
+    deeprepvizlogs.update({logsdir: deeprepvizlog})
