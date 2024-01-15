@@ -269,16 +269,16 @@ def viz_baseline_results_summary(dfs):
     plt.show()
 
 
-def viz_baseline_results_shap(df_results,  
-                              top_n=4,  
-                              show_individual_trials=False):
+def viz_contribs_shap(df_results, top_n=4,  
+                      show_individual_trials=False):
+    
     if isinstance(df_results, (list, tuple)):
         df_results = pd.concat(df_results)
     
     # first, process all SHAP values and collect them in a dataframe
     plot_df = []
     for i, row in df_results.iterrows():
-        shap_vals = row["shap_values"]
+        shap_vals = row["shap_contrib_scores"]
         if not pd.isnull(shap_vals):
             # print("[D]", shap_vals)
             shap_vals = dict(eval(shap_vals))
@@ -319,8 +319,11 @@ def viz_baseline_results_shap(df_results,
     # (2) plot the average |SHAP| across all trials for only the top N features
     n_datasets = len(plot_df['dataset'].unique())
     n_outs = len(plot_df['out'].unique())
-    fig, axes, = plt.subplots(n_outs, n_datasets, figsize=(3+3*n_datasets, 1+3*n_outs),
+    fig, axes, = plt.subplots(n_outs, n_datasets, figsize=(3+3*n_datasets, 2+3*n_outs),
                                 sharex=True, sharey='row')
+    if n_datasets==1: axes = [[ax] for ax in axes]
+
+    
     fig.suptitle(f"avg. |SHAP| proportions of the top {top_n} performers across all trials")
     fig.supylabel("Predicted target")
     fig.supxlabel("Dataset iters")
@@ -329,12 +332,16 @@ def viz_baseline_results_shap(df_results,
 
     for col_i, (dataset, plot_dfi) in enumerate(plot_df.groupby("dataset")):
         for row_i, (inp_out, plot_dfii) in enumerate(plot_dfi.groupby("model")):
-            top_performers = list(plot_dfii.drop(
-                columns=['model', 'dataset', 'out', 'inp', 'trial', 'accuracy']).mean().sort_values(
-                    ascending=False)[:top_n].apply(
-                        lambda x: '{:.0f}%'.format(x*100)).index)
+            plot_dfii_feas = plot_dfii.drop(columns=['model', 'dataset', 
+                                                     'out', 'inp', 
+                                                     'trial', 'accuracy']).mean(
+                                                     ).sort_values(ascending=False)
+            plot_dfii_feas = plot_dfii_feas[:top_n] if top_n>0 else plot_dfii_feas
+            top_performers = list(plot_dfii_feas.index)
             
             ax = axes[row_i][col_i]
+            # display(plot_dfii[top_performers])
+            plot_dfii[top_performers] = plot_dfii[top_performers].apply(np.abs)
             ax = sns.barplot(data=plot_dfii[['accuracy']+top_performers],
                             order=['accuracy']+sorted(top_performers),
                             color='tab:blue',

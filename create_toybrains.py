@@ -12,8 +12,7 @@ from PIL import Image, ImageDraw
 from colordict import ColorDict
 from joblib import Parallel, delayed  
 from copy import copy, deepcopy
-import itertools
-from tqdm.auto import tqdm
+from tqdm import tqdm
 import argparse
 import importlib
 from datetime import datetime
@@ -22,6 +21,7 @@ from tabulate import tabulate
 # add custom imports
 from utils.dataset import split_dataset
 from utils.baseline import run_lreg
+importlib.reload(sys.modules[run_lreg.__module__])
 
 import graphviz
 # from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
@@ -142,11 +142,13 @@ class ToyBrainsData:
     
     def _load_config(self, config_file):
         # if user provided '.py' in the config filename argument then remove it
+        # dynamically import the config file using its relative path
         if config_file[-3:]=='.py': config_file = config_file[:-3]
-        config_dir = os.path.dirname(os.path.abspath(config_file+'.py'))
+        config_dir = os.path.dirname((config_file+'.py'))
         if config_dir not in sys.path:
-            sys.path.insert(0, config_dir)
-        config = importlib.import_module(config_file.replace('/','.'))
+            sys.path.append(config_dir)
+        config = importlib.import_module(os.path.basename(config_file))
+
         assert hasattr(config, 'COVARS')
         self.COVARS = {cov: PROB_VAR(name=cov, **states) for cov, states in config.COVARS.items()}
         assert hasattr(config, 'RULES_COV_TO_GEN')
@@ -638,7 +640,7 @@ class ToyBrainsData:
     
     # run baseline on both attributes and covariates
     def fit_baseline_models(self,
-                            input_feature_types=["attr_subsets", "cov_subsets"],
+                            input_feature_types=["attr_all", "attr_subsets", "cov_subsets"],
                             CV=5, n_jobs=10, 
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
@@ -765,10 +767,9 @@ self.load_generated_dataset()"
             print(f'Output label  : {label}')
 
         # run logistic regression and linear regression for tabular dataset
-        compute_shap = feature_set_name in ["attr_superset", "attr_all"]
+        compute_shap = feature_set_name in ["attr_all"] #"attr_superset", 
         results_dict, model_config = run_lreg(data, 
                                               compute_shap=compute_shap)
-
         if debug:
             print(f"Train metric: {results_dict['train_metric']:>8.4f} "
                   f"Validation metric: {results_dict['val_metric']:>8.4f} "
@@ -791,6 +792,9 @@ self.load_generated_dataset()"
 
     def _get_feature_cols(self,
                           feature_types, lbl=''):
+        
+        if "attr_subsets" in feature_types: feature_types.append("attr_all")
+        if "cov_subsets" in feature_types: feature_types.append("cov_all")
         all_attr_cols = [n for n,_ in self.GENVARS.items()]
         all_cov_cols  = [n for n,_ in self.COVARS.items()]
                 
@@ -813,7 +817,6 @@ self.load_generated_dataset()"
         features_dict = {}
         for f_type in feature_types:
             if f_type == "attr_subsets":
-                features_dict.update({"attr_all": all_attr_cols})
                 superset = []
                 for subset in attr_subsets:
                     subset_name = ", ".join(subset)
@@ -833,9 +836,6 @@ self.load_generated_dataset()"
                         
             elif f_type == "cov_subsets":
                 cov_cols = [cov for cov in all_cov_cols if lbl!=cov]
-                # first add all attributes as a feature
-                if len(cov_cols)>1: 
-                    features_dict.update({"cov_all": cov_cols})
                 superset = []
                 for subset in cov_subsets:
                     subset_name = ", ".join(subset)
@@ -848,6 +848,12 @@ self.load_generated_dataset()"
                 superset = list(set(superset))
                 if superset not in cov_subsets:
                     features_dict.update({"cov_superset": superset})
+
+            elif f_type == "attr_all":
+                features_dict.update({"attr_all": all_attr_cols})
+            elif f_type == "cov_all":
+                if len(cov_cols)>1: 
+                    features_dict.update({"cov_all": cov_cols})
             else:
                 raise ValueError(f"{f_type} is an invalid feature_type. Valid input features for the baseline modelling are ['attr_subsets', 'cov_subsets']. See doc string for more info on what each tag means.")
         return features_dict
