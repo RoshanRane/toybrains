@@ -1,7 +1,3 @@
-import numpy as np
-import os, shutil 
-from copy import copy, deepcopy
-        
 # List of all covariates
 COVARS = {
             'cov_site'   : dict(states=['siteA', 'siteB']),

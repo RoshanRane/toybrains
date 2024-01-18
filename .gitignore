@@ -16,3 +16,5 @@ nohup.out
 **/wandb
 *.swp
 configs/**
+experiments/__*.ipynb
+configs/lbl1cov1_midsignal.py

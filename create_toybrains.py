@@ -21,7 +21,6 @@ from tabulate import tabulate
 # add custom imports
 from utils.dataset import split_dataset
 from utils.baseline import run_lreg
-importlib.reload(sys.modules[run_lreg.__module__])
 
 import graphviz
 # from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
@@ -639,18 +638,24 @@ class ToyBrainsData:
 ##########################################  methods for baseline models fit  #############################################
     
     # run baseline on both attributes and covariates
-    def fit_baseline_models(self,
-                            input_feature_types=["attr_all", "attr_subsets", "cov_subsets"],
+    def fit_contrib_estimators(self,
+                            input_feature_sets=["attr_all", "attr_supset",
+                                                 "attr_subsets", 
+                                                 "cov_subsets"],
+                            output_labels=["lbls", "covs"],
                             CV=5, n_jobs=10, 
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
 Fits [input features] X [output labels] X [model x cross validation folds] models where,
     [input features] can be either:
-            i) attr_subsets: all image attributes are fed as input and then several subsets of attributes are created using the current causal graph (config file) and fed as input.
-            ii) cov_subsets: All other covariates are used as input features and then each subsets of covariates are created using the current causal graph (config file) and fed as input.
+            i) "attr_all": all input features are fed at once to predict the labels.
+            ii) attr_subsets:  subsets of input features are created using the current causal graph (config file) and fed as input to individual models.
+            iii) "attr_supset": a union of all subsets of input features derived from the causal graph as fed as input at once.
+            iv) cov_subsets: All other covariates are used as input features and then each subsets of covariates are created using the current causal graph (config file) and fed as input.
     [output labels] each of the covariates in the dataset.
-    [model] can be:
-            i) logistic regression if binary label
+            v) cov_all:  all available covariates (starting with 'cov_') are fed as input features at once.
+    [model] is determined automatically. It can be:
+            i) logistic regression if label is binary
             ii) multiple logistic regression if multiclass label 
             iii) linear regression if continuous label
 
@@ -670,8 +675,14 @@ self.load_generated_dataset()"
         
         start_time = datetime.now()
         df_csv_path = glob(f"{self.OUT_DIR_SUF}/toybrains_*.csv")[0]
-            
-        labels = self.df.filter(regex = '^lbl').columns.tolist() + self.df.filter(regex = '^cov').columns.tolist()
+
+        labels = []
+        if "lbls" in output_labels:
+            labels += self.df.filter(regex = '^lbl').columns.tolist()  
+        if "covs" in output_labels:
+            labels += self.df.filter(regex = '^cov').columns.tolist()
+        assert len(labels)>0, "no labels are selected to be predicted. Please select at least one label from ['lbls', 'covs']"
+
         # create the directory to store the results
         results_out_dir = f"{self.OUT_DIR_SUF}/baseline_results" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
@@ -691,7 +702,7 @@ self.load_generated_dataset()"
         for lbl in labels:
             # get the respective list of input feature columns for each feature_type requested
             # Also, exclude the label from feature columns list
-            input_features_dict = self._get_feature_cols(input_feature_types, lbl=lbl)
+            input_features_dict = self._get_feature_cols(input_feature_sets, lbl=lbl)
             for fea_name, fea_cols in input_features_dict.items():
                 # if the label is in features list then remove it
                 if lbl in fea_cols: fea_cols.remove(lbl)
@@ -703,14 +714,15 @@ self.load_generated_dataset()"
                                          "features":fea_cols, 
                                          "feature_set_name":fea_name})
         
-        print(f'running a total of {len(all_settings)} different settings of \
-[input] x [output] x [CV] and saving result in {self.OUT_DIR_SUF}')
+        print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.OUT_DIR_SUF)}\
+\n ... running a total of {len(all_settings)} different settings of \
+[input] x [output] x [CV] and saving the result at {self.OUT_DIR_SUF}")
         
         # run each model fit in parallel
         with Parallel(n_jobs=n_jobs) as parallel:
             parallel(
                 delayed(
-                    self._fit_baseline_model)(
+                    self._fit_contrib_estimator)(
                         **settings,
                         df_csv_path=df_csv_path,
                         CV=CV,
@@ -731,16 +743,15 @@ self.load_generated_dataset()"
 
         # delete the temp csv files
         os.system(f"rm {results_out_dir}/run-bsl_*.csv")
-
+        
         runtime = str(datetime.now()-start_time).split(".")[0]
         print(f'TOTAL RUNTIME: {runtime}')
         self.results["baseline_results"]= df_out
-        self._show_baseline_results()
         return df_out
     
 
     # run one using settings
-    def _fit_baseline_model(
+    def _fit_contrib_estimator(
         self,
         trial, label, features, 
         feature_set_name,
@@ -775,13 +786,19 @@ self.load_generated_dataset()"
                   f"Validation metric: {results_dict['val_metric']:>8.4f} "
                   f"Test metric: {results_dict['test_metric']:>8.4f}")
 
+        if compute_shap:
+            # extract the SHAP scores and store as individual columns
+            shap_scores = results_dict['shap_contrib_scores']
+            results_dict.update({f"shap__{k}":v for k,v in shap_scores})
+        results_dict.pop('shap_contrib_scores')
+
         result = {
             "inp" : feature_set_name, 
             "out" : label,
             "trial" : trial,
-            **results_dict,
             **model_config,
-            **results_kwargs
+            **results_kwargs,
+            **results_dict,
         }
         
         # save the results as a csv file
@@ -793,8 +810,6 @@ self.load_generated_dataset()"
     def _get_feature_cols(self,
                           feature_types, lbl=''):
         
-        if "attr_subsets" in feature_types: feature_types.append("attr_all")
-        if "cov_subsets" in feature_types: feature_types.append("cov_all")
         all_attr_cols = [n for n,_ in self.GENVARS.items()]
         all_cov_cols  = [n for n,_ in self.COVARS.items()]
                 
@@ -832,8 +847,11 @@ self.load_generated_dataset()"
                 if superset not in cov_subsets:
                     features_dict.update({"attr_superset": superset})
                 features_dict.update({"attr_superset": list(set(superset))})
-            
-                        
+
+            elif f_type == "attr_supset":
+                superset = sorted(list(set([s for subset in attr_subsets for s in subset])))
+                features_dict.update({"attr_superset": superset})
+        
             elif f_type == "cov_subsets":
                 cov_cols = [cov for cov in all_cov_cols if lbl!=cov]
                 superset = []
@@ -855,36 +873,12 @@ self.load_generated_dataset()"
                 if len(cov_cols)>1: 
                     features_dict.update({"cov_all": cov_cols})
             else:
-                raise ValueError(f"{f_type} is an invalid feature_type. Valid input features for the baseline modelling are ['attr_subsets', 'cov_subsets']. See doc string for more info on what each tag means.")
+                raise ValueError(f"{f_type} is an invalid feature_type. \
+Valid input features for the contribution estimation modelling are \
+['attr_all','attr_subsets','attr_supset','cov_all','cov_subsets']. \
+See doc string for more info on what each tag means.")
         return features_dict
     
-    # summary
-    def _show_baseline_results(self, 
-        split=None,
-        cmap='YlOrBr',
-    ):
-        ''' summary 
-
-        PARAMETER
-        ---------
-        df_data : pandas.dataframe
-            run.csv
-
-        col : None or string
-            target columns if None then display all the metric
-        '''
-        df = self.results["baseline_results"]
-        desc = pd.DataFrame(df.groupby(['dataset','out', 'inp'])[
-            ['train_metric', 'val_metric', 'test_metric']].describe())
-        desc = desc[
-                [('train_metric', 'mean'), ('train_metric', 'std'), ('train_metric', 'min'), ('train_metric', 'max'),
-                 ('val_metric', 'mean'), ('val_metric', 'std'), ('val_metric', 'min'), ('val_metric', 'max'),
-                 ('test_metric', 'mean'), ('test_metric', 'std'), ('test_metric', 'min'), ('test_metric', 'max')]]
-        
-        # format to percentages
-        func = lambda s: f"{s*100:.2f}%" 
-        return desc.style.bar(align='mid').format(func) #desc.style.background_gradient(cmap=cmap)
-
 
 
 ##############################################  END  ###################################################

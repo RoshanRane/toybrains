@@ -168,105 +168,36 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
 
 
 #### BASELINE modelling with gen. attributes ###
+def show_contrib_table(dfs_results, 
+                       avg_over_trials=True,
+                       filter_rows={}, filter_cols=[], 
+                       color=None):
+    '''reorganize the generated baseline results and display it as a pretty table with style:
+    average the results across trials after grouping by ['dataset','out', 'inp']'''
+    if isinstance(dfs_results, (list, tuple)): dfs = pd.concat(dfs_results).copy()
+    
+    # make the dataset name shorter for pretty-ness
+    dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x))
 
-def viz_baseline_results(run_results):
-    ''' vizualization output of baseline models
-    '''
-    if not isinstance(run_results, list): run_results = [run_results]
-    dfs = []
-    for run in run_results:
-        if isinstance(run, pd.DataFrame):
-            dfs.append(run.copy())
-        elif isinstance(run, str) and os.path.exists(run):
-            dfs.append(pd.read_csv(run))
-        else:
-            raise ValueError(f"{run} is neither a path to the results csv nor a pandas dataframe")
-    viz_df = pd.concat(dfs, ignore_index=True)
-    
-    x="$R2$ / Pseudo-$R2$ (%) on test data"
-    y="Predicted Output"
-    row="Output type"
-    col="Dataset"
-    hue="Input features"
-    viz_df = viz_df.rename(columns={'test_metric':x, 'out':y, 
-                                    'inp':hue, 'dataset':col})
-    # remove the full path from the dataset names to prevent long titles
-    viz_df[col] = viz_df[col].apply(lambda x:x.split('/')[-1]) 
-    # separate covariates and labels
-    map_out_type = {'cov':'Covariates','lbl':'Label'}
-    viz_df[row] = viz_df[y].apply(lambda x: x.split('_')[0])
-    # adjust the hue for the legend
-    viz_df[hue] = viz_df[hue].apply(lambda x: x.replace(', ',',\n'))
-    unique_inps = viz_df[hue].sort_values().unique()
-    unique_cols = viz_df[col].sort_values().unique()
-    unique_y    = viz_df[y].sort_values().unique()
-    # use a different color set for attrs and lbls and conf in inputs
-    palette_attr = sns.color_palette("mako", len(unique_inps))
-    palette_covs = sns.color_palette("husl", len(unique_inps))
-    palette = {}
-    m,n=0,0
-    for cat in unique_inps:
-        if cat[:5]=='attr_':
-            palette.update({cat:palette_attr[m]})
-            m+=1
-        else:
-            palette.update({cat:palette_covs[n]})
-            n+=1
-    
-    height = 1+len(unique_y)//2
-    g = sns.catplot(data=viz_df, kind='bar',
-                    col=col, row=row,
-                    # row_order=['lbl','cov'], # show labels before covariates
-                    x=x, y=y, hue=hue, 
-                    palette=palette, #hue_order=hue_order, 
-                    errorbar=('ci', 95), 
-                    legend=True, legend_out=True,
-                    sharey='row', height=height, aspect=2.0)
-    for ax in g.axes.ravel():
-        for i in ax.containers:
-            ax.bar_label(i, fmt='%.2f', label_type='edge', padding=10)
-    
-    # adjust subplot titles
-    g.set_titles("{col_var}: {col_name}") 
-    for i, ax in enumerate(g.axes.ravel()):
-        if i==0:
-            title = ax.get_title()
-        elif i<len(unique_cols): 
-            ax.set_title(ax.get_title().replace(title,'.. '))
-        else: 
-            ax.set_title('')
-    # adjust legend
-    g._legend.set_frame_on(True)
-    # set custom x-axis tick positions and labels
-    g.set(xticks=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            xticklabels = ['0%', '20%', '40%', '60%', '80%', '100%']) 
-    plt.show()
-# plt.savefig("figures/results_bl.pdf", bbox_inches='tight')
+    grp_by = ['out','inp','dataset']
+    if not avg_over_trials: grp_by.append('trial')
 
-def viz_baseline_results_summary(dfs):
-    dfs = pd.concat(dfs)
-    dfs['Dataset iters'] = dfs['dataset'].apply(lambda x: int(x.split('_')[-1][-1]))
-    dfs['inp'] = dfs['inp'].apply(lambda x: x.replace(', ',',\n'))
-    n_cols = len(dfs['out'].unique())
-    fig, axes = plt.subplots(len(dfs['out'].unique()),1,  
-                            figsize=(5, 2*n_cols),
-                            sharex=True, sharey=True)
-    axes = axes.flatten()
-    fig.supylabel("Predicted target")
-    # fig.supxlabel("Dataset iters")
-    for i, out in enumerate(dfs['out'].unique()):
-        ax = axes[i]
-        df = dfs[(dfs['out']==out)]
-        ax.set_ylabel(out)
-        sns.lineplot(x='Dataset iters', y='test_metric', hue="inp", 
-                     data=df, ax=ax)
-        if i==0:
-            ax.legend(title=r'Accuracy ($R^2$ or $D^2$)', 
-                       loc="upper left", bbox_to_anchor=(1, 1))
-        else:
-            ax.get_legend().remove()    
-    plt.tight_layout()
-    plt.show()
+    if filter_rows:
+        for col, vals in filter_rows.items():
+            dfs = dfs[dfs[col].isin(vals)]
+    if filter_cols:
+        dfs = dfs[grp_by+filter_cols]
+
+    filter_cols = dfs.filter(regex='_metric$').columns.tolist() + dfs.filter(regex='^shap__').columns.tolist()
+    desc = dfs[grp_by+filter_cols].groupby(grp_by).mean()
+
+    # format to percentages
+    func = lambda s: int(s*100) if pd.notnull(s) else -1
+    desc = desc.map(func)
+    print("All results are shown in percentage (%)")
+    
+    return desc.style.bar(vmin=0, vmax=100, color=color) 
+
 
 
 def viz_contribs_shap(df_results, top_n=4,  
@@ -354,6 +285,8 @@ def viz_contribs_shap(df_results, top_n=4,
 
     plt.tight_layout()
     plt.show()
+    
+    return plot_df
 
 
 #############################################   Backend   #############################################
