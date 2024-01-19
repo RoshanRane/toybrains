@@ -5,7 +5,8 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 
 # function
 
-def split_dataset(data_csv, label, CV=None, trial=0, random_seed=42, debug=False):
+def split_dataset(data_csv, label, 
+                  CV=None, trial=0, random_seed=42, debug=False):
     '''
     generate the dataset
     
@@ -54,23 +55,13 @@ def split_dataset(data_csv, label, CV=None, trial=0, random_seed=42, debug=False
         assert trial <= CV, "trial should be in CV number"
         
         skf = StratifiedKFold(n_splits=CV, shuffle=True, random_state=seed)
-        # TODO remove hardcoded 
-        if label == 'cov_age':
-            n_grp = 1000
-            DF_training['grp'] = pd.cut(DF_training['label'], n_grp, labels=False)
-            target = DF_training.grp
-            for trial_no, (train_idx, val_idx) in enumerate(skf.split(target, target)):
-                if trial_no == trial:
-                    DF_train = DF_training.iloc[train_idx]
-                    DF_val = DF_training.iloc[val_idx]
-                    break
-        else:
-            target = DF_training['label']
-            for trial_no, (train_idx, val_idx) in enumerate(skf.split(DF_training, target)):
-                if trial_no == trial:
-                    DF_train = DF_training.iloc[train_idx]
-                    DF_val = DF_training.iloc[val_idx]
-                    break
+        
+        target = DF_training['label']
+        for trial_no, (train_idx, val_idx) in enumerate(skf.split(DF_training, target)):
+            if trial_no == trial:
+                DF_train = DF_training.iloc[train_idx]
+                DF_val = DF_training.iloc[val_idx]
+                break
     
     # reset the index
     DF_train.reset_index(inplace=True, drop=True)
