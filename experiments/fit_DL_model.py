@@ -150,7 +150,7 @@ class LightningModel(L.LightningModule):
 def fit_DL_model(dataset_path,
                 label,
                 model_class=SimpleCNN,
-                model_kwargs=dict(num_classes=2, final_act_size=65),
+                model_kwargs=dict(num_classes=2, final_act_size=3),
                 trainer_args=dict(max_epochs=50, accelerator='gpu',
                                   devices=[1]),
                 additional_loggers=[],
@@ -268,6 +268,7 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
     log_dir = trainer.log_dir + '/deeprepvizlog/'
     drv_backend.load_log(log_dir)
     drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
+    drv_backend.compute_metrics(log_key=log_dir)
     
     return trainer, logger
 
@@ -303,7 +304,7 @@ if __name__ == "__main__":
     model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
     
     unique_name = 'debug-mode' if args.debug else args.unique_name
-    max_epochs = 3 if args.debug else args.max_epochs
+    max_epochs = 2 if args.debug else args.max_epochs
     num_workers = 0 if args.debug else os.cpu_count()
     batch_size = args.batch_size
     start_time = datetime.now()
