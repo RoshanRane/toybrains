@@ -152,7 +152,7 @@ class LightningModel(L.LightningModule):
 ###########################################################################################
 
 def fit_DL_model(dataset_path, label_col, 
-                datasplit_df, trial='trial 0',
+                datasplit_df, trial='trial_0',
                 ID_col='subjectID', 
                 model_class=SimpleCNN,
                 model_kwargs=dict(num_classes=2, final_act_size=65),
@@ -186,8 +186,6 @@ def fit_DL_model(dataset_path, label_col,
     datasplit_df = datasplit_df[[ID_col, label_col, split_col]]
     
     # datasplit_df = datasplit_df.rename(columns={label_col:'label'}) #TODO remove this hardcoded requirement of label_col name from get_toybrain_dataloader()
-
-    
     df_train = datasplit_df[datasplit_df[split_col]=='train']    
     df_val = datasplit_df[datasplit_df[split_col]=='val']
     df_test = datasplit_df[datasplit_df[split_col]=='test']
@@ -236,9 +234,7 @@ def fit_DL_model(dataset_path, label_col,
     if show_batch:
         viz_batch(val_loader, title="Validation data")
     
-    
     # create a dataloader for DeepRepViz with the whole data and no shuffle
-
     # collect the values for deeprepviz
     IDs = datasplit_df[ID_col].values
     expected_labels = datasplit_df[LABEL_COL].values
@@ -303,15 +299,14 @@ Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
-
-    # raw_csv_path = glob(f'{dataset_path}/*{dataset_unique_name}.csv')[0]
-    # df_data = pd.read_csv(raw_csv_path)
-    # drv_backend = DeepRepVizBackend(
-    #               conf_table=df_data,
-    #               ID_col=ID_col, label_col=label_col)
-    # log_dir = trainer.log_dir + '/deeprepvizlog/'
-    # drv_backend.load_log(log_dir)
-    # drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
+    raw_csv_path = glob(f'{dataset_path}/*{dataset_unique_name}.csv')[0]
+    df_data = pd.read_csv(raw_csv_path)
+    drv_backend = DeepRepVizBackend(
+                  conf_table=df_data,
+                  ID_col=ID_col, label_col=label_col)
+    log_dir = trainer.log_dir + '/deeprepvizlog/'
+    drv_backend.load_log(log_dir)
+    drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
     
     return trainer, logger
 
@@ -366,26 +361,26 @@ Available colnames = {data.columns.tolist()}"
     datasplit_df = datasplit_df.set_index(ID_COL)
     # init as many trial columns as requested in args.k_fold
     for trial in range(args.k_fold):
-        datasplit_df[f'trial {trial}'] = 'unknown'
+        datasplit_df[f'trial_{trial}'] = 'unknown'
     # first, set aside 20% of the data as test
     train_idxs, test_idxs = train_test_split(datasplit_df.index, test_size=0.2,
                                              random_state=args.random_seed)
     for trial in range(args.k_fold):
-        datasplit_df.loc[test_idxs, f'trial {trial}'] = 'test'
+        datasplit_df.loc[test_idxs, f'trial_{trial}'] = 'test'
     # initialize such that all data is used in the first trial
     if args.k_fold <= 1:
         train_idxs, val_idxs = train_test_split(train_idxs, test_size=0.2, 
                                                random_state=args.random_seed)
-        datasplit_df.loc[train_idxs, 'trial 0'] = 'train'
-        datasplit_df.loc[val_idxs, 'trial 0'] = 'val'
+        datasplit_df.loc[train_idxs, 'trial_0'] = 'train'
+        datasplit_df.loc[val_idxs, 'trial_0'] = 'val'
     else:
         splitter = StratifiedKFold(n_splits=args.k_fold,
                                    shuffle=True,
                                    random_state=args.random_seed)
         splits = splitter.split(train_idxs, y=datasplit_df.loc[train_idxs, LABEL_COL])
         for trial_idx, (train_idxs_i, val_idxs_i) in enumerate(splits): 
-            datasplit_df.loc[train_idxs[train_idxs_i], f'trial {trial_idx}'] = 'train'
-            datasplit_df.loc[train_idxs[val_idxs_i], f'trial {trial_idx}'] = 'val'
+            datasplit_df.loc[train_idxs[train_idxs_i], f'trial_{trial_idx}'] = 'train'
+            datasplit_df.loc[train_idxs[val_idxs_i], f'trial_{trial_idx}'] = 'val'
 
     datasplit_df = datasplit_df.sort_index()
     (datasplit_df.filter(like='trial')!='unknown').all(), "some data points are not assigned to any split. {}".format(datasplit_df)
@@ -402,7 +397,7 @@ Available colnames = {data.columns.tolist()}"
         trainer, logger = fit_DL_model(
                                 DATA_DIR, 
                                 label_col=LABEL_COL, ID_col=ID_COL, 
-                                datasplit_df=datasplit_df.reset_index(), trial=f'trial {trial}',
+                                datasplit_df=datasplit_df.reset_index(), trial=f'trial_{trial}',
                                 model_class=DL_MODEL, model_kwargs=model_kwargs,
                                 debug=args.debug, 
                                 additional_callbacks=[],
@@ -420,14 +415,11 @@ Available colnames = {data.columns.tolist()}"
     else:
         processes = []
         for trial in range(args.k_fold):
-            p = mp.Process(_run_one_trial, 
-                           trial)
+            p = mp.Process(target=_run_one_trial, args=(trial,))
             p.start()
             processes.append(p)
-
         # wait for all processes to finish
-        for p in processes:
-            p.join()
+        for p in processes: p.join()
 
     # runtime
     total_time = datetime.now() - start_time
