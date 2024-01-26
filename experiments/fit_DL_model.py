@@ -332,18 +332,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # next check that the toybrains dataset is generated and available
-    DATA_DIR = os.path.join(TOYBRAINS_DIR, args.data_dir)
+    DATA_DIR = os.path.abspath(args.data_dir)
     DATA_CSV = glob(DATA_DIR + '/toybrains*.csv')
     assert len(DATA_CSV)==1, f"No toybrains dataset was found in {DATA_DIR}. Ensure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo. Also cross check that the dataset directory path you have provided here = '{args.data_dir}'  is correct."
     DATA_CSV = DATA_CSV[0]
     ID_COL = 'subjectID'
     LABEL_COL = 'lbl_lesion'
     
-    unique_name = 'debugmode' if args.debug else args.unique_name
+    unique_name = args.unique_name
     if args.debug:
+        os.system('rm -rf log/*debugmode*')
+        unique_name = 'debugmode'+unique_name
         args.max_epochs = 1
         args.batch_size = 5
-        # args.k_fold = 1
+        args.k_fold = 2 if args.k_fold>2 else args.k_fold
         num_workers = 5
     else:
         num_workers = 8
@@ -425,3 +427,4 @@ Available colnames = {data.columns.tolist()}"
     total_time = datetime.now() - start_time
     minutes, seconds = divmod(total_time.total_seconds(), 60)
     print(f"Total runtime: {int(minutes)} minutes {int(seconds)} seconds")
+    

@@ -270,8 +270,7 @@ class ToyBrainsData:
     #                                 edges=self.CGM_edges)
 
     def show_current_config(self, 
-                            show_dag_probas=True, 
-                            return_causal_graph=False):
+                            show_dag_probas=True):
         """
         show_attr_probas = True : shows how the sampling probability distribution of the different
                                   image attributes change for each covariate/label state. This feature
@@ -376,7 +375,7 @@ class ToyBrainsData:
            
                 plt.tight_layout()
                 plt.show()
-        
+
         return self.draw_dag()
     
     
@@ -870,8 +869,7 @@ self.load_generated_dataset()"
             elif f_type == "attr_all":
                 features_dict.update({"attr_all": all_attr_cols})
             elif f_type == "cov_all":
-                if len(cov_cols)>1: 
-                    features_dict.update({"cov_all": cov_cols})
+                features_dict.update({"cov_all": all_cov_cols})
             else:
                 raise ValueError(f"{f_type} is an invalid feature_type. \
 Valid input features for the contribution estimation modelling are \

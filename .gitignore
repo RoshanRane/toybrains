@@ -1,6 +1,5 @@
 .ipynb_checkpoints/
 *_checkpoint*
-dataset/
 results/
 **/images/*.jpg
 **/labels/*.jpg
@@ -9,12 +8,15 @@ results/
 *.cpython-*.pyc
 nohup.out
 **/nohup*.out
-**/*log*/
 **/*.pt
 **/*.ckpt
 **/*.h5
 **/wandb
 *.swp
-configs/**
 experiments/__*.ipynb
-configs/lbl1cov1_midsignal.py
+**/configs/**
+**/_nohup/**
+**/dataset/**
+**/log/**
+.nfs*
+experiments/lblmidr-consite/configs/lblmidr-consite_cy0_cX0_yX0.py

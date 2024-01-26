@@ -167,7 +167,7 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
 
 
 
-#### BASELINE modelling with gen. attributes ###
+#########################################        Baseline models        ########################################
 def show_contrib_table(dfs_results, 
                        avg_over_trials=True,
                        filter_rows={}, filter_cols=[], 
@@ -315,7 +315,8 @@ def viz_rep_metrics(metrics_scores, title=''):
 
 
 def load_results_from_logdir(logsdir, 
-                             best_ckpt_by='loss', best_ckpt_metric_should_be='min'):
+                             best_ckpt_by='loss', 
+                             best_ckpt_metric_should_be='min'):
     '''Load all DeepRepViz log/checkpoints present in the directory'''
     deeprepvizlog = {}
     assert os.path.isdir(logsdir)
