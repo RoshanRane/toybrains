@@ -177,7 +177,7 @@ def show_contrib_table(dfs_results,
     if isinstance(dfs_results, (list, tuple)): dfs = pd.concat(dfs_results).copy()
     
     # make the dataset name shorter for pretty-ness
-    dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x))
+    dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x.rstrip('/')))
 
     grp_by = ['out','inp','dataset']
     if not avg_over_trials: grp_by.append('trial')

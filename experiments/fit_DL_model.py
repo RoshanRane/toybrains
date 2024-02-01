@@ -175,7 +175,7 @@ def fit_DL_model(dataset_path, label_col,
         L.seed_everything(random_seed)
     
     # load the dataset
-    dataset_unique_name = dataset_path.split('/')[-1].split('_')[-1]
+    dataset_name = os.path.basename(dataset_path)
 
     # split the dataset as defined in the datasplit_df
     if datasplit_df.index.name==ID_col:
@@ -190,7 +190,7 @@ def fit_DL_model(dataset_path, label_col,
     df_val = datasplit_df[datasplit_df[split_col]=='val']
     df_test = datasplit_df[datasplit_df[split_col]=='test']
 
-    print(f"Dataset: {dataset_path} ({dataset_unique_name})\n  Training data split = {len(df_train)} \n\
+    print(f"Dataset: {dataset_name} \n  Training data split = {len(df_train)} \n\
   Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
     
     # create pytorch data loaders
@@ -262,7 +262,8 @@ def fit_DL_model(dataset_path, label_col,
 
     # configure TensorBoardLogger as the main logger 
     # create a unique name for the logs based on the dataset, model and user provided suffix
-    unique_name = f'toybrains-{dataset_unique_name}_{model_class.__name__}' + unique_name
+    if unique_name != '': unique_name = '_' + unique_name
+    unique_name = f'{dataset_name}_{model_class.__name__}{unique_name}'
     logger = TensorBoardLogger(save_dir='log', name=unique_name, version=trial) 
     if additional_loggers: # plus, any additional user provided loggers
         logger = [logger] + additional_loggers
@@ -295,11 +296,11 @@ def fit_DL_model(dataset_path, label_col,
 -------------------------------------------------------\n\
 Dataset      = {} ({})\n\
 Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
-        dataset_path, dataset_unique_name, 
+        dataset_path, dataset_name, 
          test_scores['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
-    raw_csv_path = glob(f'{dataset_path}/*{dataset_unique_name}.csv')[0]
+    raw_csv_path = glob(f'{dataset_path}/*{dataset_name}.csv')[0]
     df_data = pd.read_csv(raw_csv_path)
     drv_backend = DeepRepVizBackend(
                   conf_table=df_data,
@@ -334,7 +335,9 @@ if __name__ == "__main__":
     # next check that the toybrains dataset is generated and available
     DATA_DIR = os.path.abspath(args.data_dir)
     DATA_CSV = glob(DATA_DIR + '/toybrains*.csv')
-    assert len(DATA_CSV)==1, f"No toybrains dataset was found in {DATA_DIR}. Ensure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo. Also cross check that the dataset directory path you have provided here = '{args.data_dir}'  is correct."
+    assert len(DATA_CSV)==1, f"Toybrains dataset found = {DATA_CSV}.\
+ \nEnsure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo.\
+Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     DATA_CSV = DATA_CSV[0]
     ID_COL = 'subjectID'
     LABEL_COL = 'lbl_lesion'

@@ -20,3 +20,4 @@ experiments/__*.ipynb
 **/log/**
 .nfs*
 experiments/lblmidr-consite/configs/lblmidr-consite_cy0_cX0_yX0.py
+__*.ipynb

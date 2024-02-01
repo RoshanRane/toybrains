@@ -18,14 +18,24 @@ import importlib
 from datetime import datetime
 from tabulate import tabulate
 
+from sklearn.compose import ColumnTransformer
+from sklearn.compose import make_column_selector as selector
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import make_scorer
+from scipy.special import logit
+
+import shap
+
 # add custom imports
 from utils.dataset import split_dataset
-from utils.baseline import run_lreg
+from utils.metrics import d2_metric_probas
+# from utils.vizutils import plot_col_dists
 
 import graphviz
 # from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
-
-# from utils.vizutils import plot_col_dists
 
 #################################  Helper functions  ###############################################
 
@@ -89,8 +99,8 @@ with n={self.k} states {self.states} and weights {self.weights}")
 #         # windows  = windows[pad[0]-1:-pad[1]]
 #         return self
 
-################################## Main Class ############################################
-
+##################################               Main Class             #################################################
+########################################################################################################################
 class ToyBrainsData:
     
     def __init__(self,  
@@ -248,7 +258,8 @@ class ToyBrainsData:
             for state, new_values in states.items():
                  self.RULES_COV_TO_GEN[key][state] = new_values          
         
-##########################################  methods for config and viz #############################################
+##########################################      methods for CONFIG FILE           ###################################################
+#####################################################################################################################################
 
     def show_all_states(self):
         # generative image attributes
@@ -441,7 +452,8 @@ class ToyBrainsData:
 
             return dot
         
-##########################################  methods for generating dataset #############################################
+##########################################  methods for GENERATING DATASET    #######################################################
+#####################################################################################################################################
 
     def _setup_genvars_covars(self):
         # define all the generative properties for the images
@@ -488,7 +500,8 @@ class ToyBrainsData:
         
         
         
-    def generate_dataset_table(self, n_samples, outdir_suffix='n'):
+    def generate_dataset_table(self, n_samples, outdir_suffix='n',
+                               verbose=1):
         self._init_df()
         
         if self.debug:
@@ -496,7 +509,7 @@ class ToyBrainsData:
             for name, var in self.GENVARS.items():
                 print(f"{name} {' '*(25-len(name))} {var.states}")
             
-        print("Sampling image gen. attributes for n={} toybrain samples".format(n_samples))
+        if verbose>0: print("Sampling image gen. attributes for n={} toybrain samples".format(n_samples))
         
         for subID in tqdm(range(n_samples)):
             # first reset all generative image attributes to have uniform distribution
@@ -538,10 +551,11 @@ class ToyBrainsData:
         return self.df
     
         
-    def generate_dataset_images(self, n_jobs=10):
+    def generate_dataset_images(self, n_jobs=10,
+                                verbose=1):
         """Use the self.df and create the images and store them"""
         n_samples = len(self.df)
-        print("Generating n={} toybrain images".format(n_samples))
+        if verbose>0: print("Generating n={} toybrain images".format(n_samples))
         shutil.rmtree(f"{self.OUT_DIR_SUF}/images", ignore_errors=True)
         os.makedirs(f"{self.OUT_DIR_SUF}/images")
         # os.makedirs(f"{self.OUT_DIR}/masks", exist_ok=True)
@@ -634,7 +648,8 @@ class ToyBrainsData:
         area = 0.5 * n * side_length * r
         return area
 
-##########################################  methods for baseline models fit  #############################################
+##########################################  methods for BASELINE MODEL FIT  #############################################
+##########################################################################################################################
     
     # run baseline on both attributes and covariates
     def fit_contrib_estimators(self,
@@ -642,7 +657,9 @@ class ToyBrainsData:
                                                  "attr_subsets", 
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
+                            metric_name="r2",
                             CV=5, n_jobs=10, 
+                            verbose=1,
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
 Fits [input features] X [output labels] X [model x cross validation folds] models where,
@@ -690,6 +707,7 @@ self.load_generated_dataset()"
             n_jobs=1
             CV=2
             random_seed=42
+            verbose=10
         
         for_result_out = {
             "dataset" : self.OUT_DIR_SUF,
@@ -713,7 +731,7 @@ self.load_generated_dataset()"
                                          "features":fea_cols, 
                                          "feature_set_name":fea_name})
         
-        print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.OUT_DIR_SUF)}\
+        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.OUT_DIR_SUF)}\
 \n ... running a total of {len(all_settings)} different settings of \
 [input] x [output] x [CV] and saving the result at {self.OUT_DIR_SUF}")
         
@@ -726,7 +744,8 @@ self.load_generated_dataset()"
                         df_csv_path=df_csv_path,
                         CV=CV,
                         results_out_dir=results_out_dir,
-                        random_seed=random_seed, debug=debug, 
+                        metric_name=metric_name,
+                        random_seed=random_seed, verbose=verbose-1, 
                         results_kwargs=for_result_out
                     ) for settings in tqdm(all_settings))
 
@@ -744,7 +763,7 @@ self.load_generated_dataset()"
         os.system(f"rm {results_out_dir}/run-bsl_*.csv")
         
         runtime = str(datetime.now()-start_time).split(".")[0]
-        print(f'TOTAL RUNTIME: {runtime}')
+        if verbose>0: print(f'TOTAL RUNTIME: {runtime}')
         self.results["baseline_results"]= df_out
         return df_out
     
@@ -754,9 +773,10 @@ self.load_generated_dataset()"
         self,
         trial, label, features, 
         feature_set_name,
+        metric_name,
         df_csv_path,
         CV, results_out_dir,
-        random_seed, debug, results_kwargs):
+        random_seed, verbose, results_kwargs):
         ''' run one baseline linear model for the given 
         [label, features] with 'trial' number of cross-validation folds''' 
         data = []
@@ -764,32 +784,33 @@ self.load_generated_dataset()"
         for data_split in split_dataset(df_csv_path, label, 
                                         CV, trial, 
                                         random_seed, 
-                                        debug):
+                                        verbose=verbose>1):
             # get the input and output
             X = data_split[features]
             y = data_split[label].values
             data.append([X, y])
         # display(data)
                 
-        if debug: 
+        if verbose>1: 
             print(f'Features: {feature_set_name}')
             print(f'Input features: {data[0][0].columns.tolist()}')
             print(f'Output label  : {label}')
 
         # run logistic regression and linear regression for tabular dataset
         compute_shap = feature_set_name in ["attr_all"] #"attr_superset", 
-        results_dict, model_config = run_lreg(data, 
-                                              compute_shap=compute_shap)
-        if debug:
-            print(f"Train metric: {results_dict['train_metric']:>8.4f} "
-                  f"Validation metric: {results_dict['val_metric']:>8.4f} "
-                  f"Test metric: {results_dict['test_metric']:>8.4f}")
+        results_dict, model_config = self._run_lreg(data,
+                                                    compute_shap=compute_shap,
+                                                    metric_name=metric_name)
+        if verbose>1:
+            print(f"Train score: {results_dict['train_metric']:>8.4f} "
+                  f"Val   score: {results_dict['val_metric']:>8.4f} "
+                  f"Test  score: {results_dict['test_metric']:>8.4f}")
 
         if compute_shap:
             # extract the SHAP scores and store as individual columns
             shap_scores = results_dict['shap_contrib_scores']
             results_dict.update({f"shap__{k}":v for k,v in shap_scores})
-        results_dict.pop('shap_contrib_scores')
+            results_dict.pop('shap_contrib_scores')
 
         result = {
             "inp" : feature_set_name, 
@@ -805,6 +826,165 @@ self.load_generated_dataset()"
             f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature_set_name}_{trial}-of-{CV}_{model_config['model']}.csv", 
                   index=False)
         
+
+    # TODO refactor for cleaner code
+    def _run_lreg(self, 
+                 data, compute_shap=False, 
+                 random_state=None,
+                 metric_name="r2"):
+        
+        results = {}
+
+        (data_train, target_train), (data_val, target_val), (data_test, target_test) = data
+        
+        cat_col_names_selector = selector(dtype_include=object)
+        cont_col_names_selector = selector(dtype_exclude=object)
+        
+        categorical_preprocessor = OneHotEncoder(handle_unknown='ignore')
+        continuous_preprocessor = StandardScaler()
+        
+        # select continuous columns
+        cont_col_names = cont_col_names_selector(data_train)
+        
+        # select categorical columns
+        cat_col_names = cat_col_names_selector(data_train)
+        preprocessor = ColumnTransformer(
+            [
+                ("one-hot-encoder", categorical_preprocessor, cat_col_names),
+                ("minmax_scaler", continuous_preprocessor, cont_col_names),
+            ]
+        )
+        
+        # TODO Refactoring needed
+        n_classes = len(set(target_train))
+        # binary labels
+        if n_classes == 2: 
+            model_name = 'logistic_regression'
+            pipe = make_pipeline(preprocessor, 
+                                LogisticRegression(max_iter=2000, random_state=random_state,
+                                                    penalty='l2',  solver='lbfgs'))
+            parameters = {'logisticregression__C': [1/0.5,1,1/5, 1/10]}
+            if metric_name.lower() == "r2": 
+                metric_name = "r2-pseudo"
+                metric = make_scorer(d2_metric_probas, needs_proba=True)
+            else:
+                metric = metric_name
+            
+        
+        # multiclass labels
+        elif n_classes <= 5:
+            model_name = 'multinomial_logistic_regression' 
+            pipe = make_pipeline(preprocessor, 
+                                LogisticRegression(max_iter=2000, random_state=random_state, 
+                                                    multi_class='multinomial', 
+                                                    penalty='l2', solver='lbfgs'))
+            parameters = {'logisticregression__C': [1/0.5,1,1/5,1/10]}
+            if metric_name.lower() == "r2": 
+                metric_name = "r2-pseudo"
+                metric = make_scorer(d2_metric_probas, needs_proba=True)
+            else:
+                metric = metric_name
+            
+        # regression label
+        else: # TODO test this
+            model_name = 'linear_regression'
+            pipe = make_pipeline(preprocessor, 
+                                Ridge(random_state=random_state))
+            parameters = {'ridge__alpha': [0.1,0.5,1,5]}
+            metric = metric_name
+        
+        # Use GridSearchCV to find the optimal hyperparameters for the pipeline
+        clf = GridSearchCV(pipe, param_grid=parameters, scoring=metric)
+        
+        # Train and fit logistic regression model
+        clf.fit(data_train, target_train)
+        
+        # Predict using the trained model
+        results.update({"train_metric": clf.score(data_train, target_train),
+                        "val_metric": clf.score(data_val, target_val),
+                        "test_metric": clf.score(data_test, target_test)})
+        tr_acc = clf.score(data_train, target_train)
+        vl_acc = clf.score(data_val, target_val)
+        te_acc = clf.score(data_test, target_test)
+
+        # SHAP explanations
+        shap_contrib_scores = None
+        if compute_shap:
+            preprocessing, best_model = clf.best_estimator_[:-1], clf.best_estimator_[-1]
+            # print("[D] best model = ", best_model)
+            data_train_processed = preprocessing.transform(data_train)
+            data_val_processed = preprocessing.transform(data_val)
+            data_test_processed = preprocessing.transform(data_test)
+            all_data_processed = np.concatenate((data_train_processed,
+                                                data_val_processed, 
+                                                data_test_processed), axis=0)
+            # transform the existing feature_names to include the one-hot encoded features
+            feature_names = data_train.columns.tolist()
+            new_feature_names = preprocessing['columntransformer'].get_feature_names_out(feature_names)
+            n_feas = len(new_feature_names)
+            # remove preprocessor names from feature names
+            new_feature_names = [name.split("__")[-1] for name in new_feature_names]
+            explainer = shap.Explainer(best_model, 
+                                    data_train_processed,
+                                    feature_names=new_feature_names)
+            shap_values = explainer(all_data_processed)
+            base_shap_values = shap_values.base_values 
+            # get the model predicted probabilities to calculate C = probas - base for each sample
+            model_probas = best_model.predict_proba(all_data_processed) 
+            #  I verified that the shap values correspond to the second proba dim and not the first
+            model_probas = model_probas[:,1].squeeze()      
+            # calculate C = probas - base for each sample
+            logodds_adjusted = logit(model_probas) - base_shap_values
+            # now we expect the sum(shap_values) to be equal to logodds_adjusted for each sample
+            assert np.allclose(shap_values.values.sum(axis=1), logodds_adjusted), \
+                "sum(shap_values) != logodds_adjusted for some samples"
+            # scale shap values to positive values [0,inf] for each sample X
+            shap_val_mins = shap_values.values.min(axis=1)
+            shap_values_pos = (shap_values.values - shap_val_mins[:,np.newaxis])
+            # also apply these transforms to the RHS (logodds_centered) n_feas times
+            logodds_adjusted = (logodds_adjusted - n_feas*shap_val_mins)
+            # calculate shap value based contrib score for each feature
+            contribs = shap_values_pos / logodds_adjusted[:,np.newaxis]
+            
+            contribs_avg = contribs.mean(axis=0) 
+
+    #         fi = 37
+    #         print('[D] f={} sum(contrib[f])[:5] = {} \t sum(contrib_avg)={}\
+    #  \ncontribs[:5,f]     \t= {} \
+    #  \nShap_scaled[:5,f]  \t= {} \
+    #  \nlogodds_adjusted[:5] \t= {}'.format(new_feature_names[fi], contribs[:5].sum(axis=1), contribs_avg.sum(),
+    #             contribs[:5,fi], shap_values_pos[:5,fi],
+    #             logodds_adjusted[:5]))
+    #         print("[D]", contribs.mean(), contribs_avg)
+            # calculate mean of absolute shaps for each feature
+            # contribs = np.abs(shap_values.values)
+            # shap_contrib_scores = np.abs(best_model.coef_).squeeze().tolist() # model coefficients
+            #min max scale the avg contribs to [0,1]
+            contribs_avg = (contribs_avg - contribs_avg.min())/(contribs_avg.max() - contribs_avg.min())
+            # contribs_avg = contribs_avg - contribs_avg.min()
+            #scale it to sum to 1
+            contribs_avg = contribs_avg / contribs_avg.sum()
+
+            shap_contrib_scores = [(fea_name, contribs_avg[i]) \
+                                for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
+            results.update({"shap_contrib_scores": shap_contrib_scores})
+
+        settings = {"model":model_name, "metric":metric_name, "model_config":pipe }
+        return results, settings
+##### code for using shapr instead of shap
+# import shaprpy
+#         setattr(best_model, 'feature_names_in_',  np.array(new_feature_names))
+#         setattr(best_model, 'n_features_in_',  len(new_feature_names))
+#         df_shapr, _, _, _ = shaprpy.explain(model = best_model,
+#                                             x_train = pd.DataFrame(data_train_processed, columns=new_feature_names),
+#                                             x_explain = pd.DataFrame(all_data_processed, columns=new_feature_names),
+#                                             approach = 'empirical',
+#                                             n_combinations = 1000,
+#                                             prediction_zero = data_train_processed.mean().item()
+#                                             )
+#         # separate the base_shap in the df_shapr
+#         base_shap_values = df_shapr['none']
+#         shap_values = df_shapr.drop(columns=['none']).values
 
     def _get_feature_cols(self,
                           feature_types, lbl=''):

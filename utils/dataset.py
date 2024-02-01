@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 # function
 
 def split_dataset(data_csv, label, 
-                  CV=None, trial=0, random_seed=42, debug=False):
+                  CV=None, trial=0, random_seed=42, verbose=False):
     '''
     generate the dataset
     
@@ -69,7 +69,7 @@ def split_dataset(data_csv, label,
     DF_test.reset_index(inplace=True, drop=True)
     
     # print the number of rows in each dataframe
-    if debug:
+    if verbose:
         print(f"Full dataset:   {len(DF)}\n"
               f"Train:  {len(DF_train)}\n"
               f"Val:    {len(DF_val)}\n"

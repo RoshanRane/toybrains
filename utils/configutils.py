@@ -31,7 +31,9 @@ def create_config_file(config_fname, covars, rules,
                        n_samples=1000, 
                        show_dag_probas=False, 
                        return_baseline_results=False,
-                       gen_images=False):
+                       baseline_metric="r2",
+                       gen_images=False,
+                       verbose=1):
     
     # write the config file
     with open(config_fname, 'w') as f:
@@ -46,7 +48,7 @@ RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars),
 
     toy = ToyBrainsData(config=config_fname)
 
-    df = toy.generate_dataset_table(n_samples=n_samples, 
+    df = toy.generate_dataset_table(n_samples=n_samples, verbose=verbose, 
                                     outdir_suffix=f"n_{os.path.basename(config_fname).replace('.py','')}")
 
     if show_dag_probas:
@@ -54,14 +56,25 @@ RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars),
         display(toy.show_current_config())
     
     if gen_images:
-        toy.generate_dataset_images(n_jobs=10)
+        toy.generate_dataset_images(n_jobs=10, verbose=1) # print the image gen logs always
 
     if return_baseline_results:
         df_results = toy.fit_contrib_estimators(
             input_feature_sets=["attr_all", "attr_subsets", "cov_all"], 
-            output_labels=["lbls"], CV=10,
-            debug=False)
+            output_labels=["lbls"], CV=10, 
+            metric_name=baseline_metric,
+            debug=False,
+            verbose=verbose)
 
         return df_results
 
 
+
+def generate_baseline_results(baseline_metric="r2"):
+    toy = ToyBrainsData(config=config_fname)
+    df_results = toy.fit_contrib_estimators(
+        input_feature_sets=["attr_all", "attr_subsets", "cov_all"], 
+        output_labels=["lbls"], CV=10, 
+        metric_name=baseline_metric,
+        debug=False,
+        verbose=verbose)

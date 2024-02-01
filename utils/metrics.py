@@ -30,8 +30,8 @@ def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None,
     y_null_probas = DummyClassifier(strategy='prior').fit(X_dummy, y_true).predict_proba(X_dummy)
     #strategy : {"most_frequent", "prior", "stratified", "uniform",  "constant"}
     # suggestion from https://stackoverflow.com/a/53215317
-    llf = -log_loss(y_true, y_pred_probas, normalize=False, labels=unique_y)
-    llnull = -log_loss(y_true, y_null_probas, normalize=False, labels=unique_y)
+    llf = -log_loss(y_true, y_pred_probas, normalize=False, labels=[0,1]) # unique_y TODO remove hardcoding
+    llnull = -log_loss(y_true, y_null_probas, normalize=False, labels=[0,1]) # unique_y TODO remove hardcoding
     ### McFadden’s pseudo-R-squared: 1 - (llf / llnull)
     explained_deviance = 1 - (llf / llnull)
     ## Cox & Snell’s pseudo-R-squared: 1 - exp((llnull - llf)*(2/nobs))
