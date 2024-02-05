@@ -18,6 +18,7 @@ import importlib
 from datetime import datetime
 from tabulate import tabulate
 
+import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector as selector
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -25,12 +26,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import make_scorer
+from sklearn.model_selection import train_test_split, StratifiedKFold
 from scipy.special import logit
 
 import shap
 
 # add custom imports
-from utils.dataset import split_dataset
 from utils.metrics import d2_metric_probas
 # from utils.vizutils import plot_col_dists
 
@@ -541,12 +542,12 @@ class ToyBrainsData:
         if outdir_suffix[0]=='n': 
             outdir_suffix = outdir_suffix.replace('n',f"n{n_samples}", 1)
             
-        self.OUT_DIR_SUF = f"{self.OUT_DIR}_{outdir_suffix}"
+        self.DATASET_DIR = f"{self.OUT_DIR}_{outdir_suffix}"
         # delete previous folder if they already exist
-        shutil.rmtree(self.OUT_DIR_SUF, ignore_errors=True)
-        os.makedirs(self.OUT_DIR_SUF)
+        shutil.rmtree(self.DATASET_DIR, ignore_errors=True)
+        os.makedirs(self.DATASET_DIR)
         # save the dataframe in the dataset folder
-        self.df.to_csv(f"{self.OUT_DIR_SUF}/toybrains_{outdir_suffix}.csv")
+        self.df.to_csv(f"{self.DATASET_DIR}/toybrains_{outdir_suffix}.csv")
         
         return self.df
     
@@ -556,8 +557,8 @@ class ToyBrainsData:
         """Use the self.df and create the images and store them"""
         n_samples = len(self.df)
         if verbose>0: print("Generating n={} toybrain images".format(n_samples))
-        shutil.rmtree(f"{self.OUT_DIR_SUF}/images", ignore_errors=True)
-        os.makedirs(f"{self.OUT_DIR_SUF}/images")
+        shutil.rmtree(f"{self.DATASET_DIR}/images", ignore_errors=True)
+        os.makedirs(f"{self.DATASET_DIR}/images")
         # os.makedirs(f"{self.OUT_DIR}/masks", exist_ok=True)
         
         # Generate images and save them 
@@ -614,7 +615,7 @@ class ToyBrainsData:
                                  fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
                                  outline=self.get_color_val(genvars['brain-int_border']))
         # (d) save the image
-        image.save(f"{self.OUT_DIR_SUF}/images/{subject.name}.jpg")
+        image.save(f"{self.DATASET_DIR}/images/{subject.name}.jpg")
         
     
     def generate_dataset(self, n_samples, n_jobs=10, outdir_suffix='n'):
@@ -626,7 +627,7 @@ class ToyBrainsData:
             
             
     def load_generated_dataset(self, dataset_path):
-        self.OUT_DIR_SUF = dataset_path
+        self.DATASET_DIR = dataset_path
         self.df = pd.read_csv(glob(f'{dataset_path}/toybrains_*.csv')[0])
          
             
@@ -648,8 +649,9 @@ class ToyBrainsData:
         area = 0.5 * n * side_length * r
         return area
 
+##########################################                                  #############################################
 ##########################################  methods for BASELINE MODEL FIT  #############################################
-##########################################################################################################################
+##########################################                                  #############################################
     
     # run baseline on both attributes and covariates
     def fit_contrib_estimators(self,
@@ -658,7 +660,8 @@ class ToyBrainsData:
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
                             metric_name="r2",
-                            CV=5, n_jobs=10, 
+                            holdout_data=None,
+                            outer_CV=5, inner_CV=5, n_jobs=None, 
                             verbose=1,
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
@@ -677,20 +680,37 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
 
         PARAMETERS
         ----------
-        CV : int, default : 10
-            number of cross validation
+        outer_CV: int, default : 5
+            number of trials (outer cross validations) to run the model fit
+        inner_CV : int, default : 5
+            number of cross validation during GridSearchCV
+        test_dataset : str, default : None
+            provide a separate test dataset / holdout dataset to evaluate all the model on.
+            if set to None, then the test dataset is created as 20% of the training dataset using train_test_split.
         random_seed : int, default : 42
             random state for reproducibility
         debug : boolean, default : False
             debug mode
         '''
         # sanity check that the dataset table has been loaded
-        assert len(self.df)>0 and hasattr(self, "OUT_DIR_SUF"), "first generate the dataset table \
+        assert len(self.df)>0 and hasattr(self, "DATASET_DIR"), "first generate the dataset table \
 using self.generate_dataset_table() method or load an already generated dataset using \
-self.load_generated_dataset()" 
+self.load_generated_dataset()"  
+        assert metric_name in sklearn.metrics.get_scorer_names(), f"metric_name '{metric_name}' is invalid.\
+It should be one of the sklearn.metrics.get_scorer_names()"
         
         start_time = datetime.now()
-        df_csv_path = glob(f"{self.OUT_DIR_SUF}/toybrains_*.csv")[0]
+
+        # load the dataset csv tables
+        df_csv_path = glob(f"{self.DATASET_DIR}/toybrains_*.csv")
+        assert len(df_csv_path)==1, f"In {self.DATASET_DIR}, either no dataset tables were found or more than 1 tables were found = {df_csv_path}."
+        df_data = pd.read_csv(df_csv_path[0]).set_index("subjectID")
+        # load also the test dataset if provided
+        df_holdout = None
+        if holdout_data is not None:
+            df_hold_csv_path = glob(f"{holdout_data}/toybrains_*.csv")
+            assert len(df_hold_csv_path)!=1, f"In {self.holdout_data}, either no dataset tables were found or more than 1 tables were found = {df_hold_csv_path}."
+            df_holdout = pd.read_csv(df_hold_csv_path[0]).set_index("subjectID")
 
         labels = []
         if "lbls" in output_labels:
@@ -700,54 +720,79 @@ self.load_generated_dataset()"
         assert len(labels)>0, "no labels are selected to be predicted. Please select at least one label from ['lbls', 'covs']"
 
         # create the directory to store the results
-        results_out_dir = f"{self.OUT_DIR_SUF}/baseline_results" 
+        results_out_dir = f"{self.DATASET_DIR}/baseline_results" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
         os.makedirs(results_out_dir)
         if debug: #simplify
             n_jobs=1
             CV=2
+            n_trials=2
             random_seed=42
             verbose=10
         
-        for_result_out = {
-            "dataset" : self.OUT_DIR_SUF,
-            "type" : "baseline",
-            "n_samples" : len(self.df)}
-           
         # generate the different settings of [input features] X [output labels] X [cross validation]
         all_settings = []
         for lbl in labels:
             # get the respective list of input feature columns for each feature_type requested
             # Also, exclude the label from feature columns list
             input_features_dict = self._get_feature_cols(input_feature_sets, lbl=lbl)
+            
             for fea_name, fea_cols in input_features_dict.items():
                 # if the label is in features list then remove it
                 if lbl in fea_cols: fea_cols.remove(lbl)
-                # and ensure the new list of features is not empty
+                # if the new list of features is empty then skip
                 if len(fea_cols)==0: continue
-                for cv_i in range(CV):
-                    all_settings.append({"trial":cv_i, 
-                                         "label":lbl, 
-                                         "features":fea_cols, 
-                                         "feature_set_name":fea_name})
+                # only select the input features and the label in the data table
+                data_columns = fea_cols + [lbl]
+                df_data_i = df_data[data_columns]
+                df_holdout_i = df_holdout[data_columns] if df_holdout is not None else None
+
+                # split the dataset into tuples of training, and test sets
+                datasplits = self._split_dataset(
+                                    df_data_i, stratify_by=lbl,
+                                    CV=outer_CV,
+                                    random_seed=random_seed, verbose=verbose)
+                
+                for trial_i, (df_train_i, df_test_i) in enumerate(datasplits):
+                    
+                    for_result_out = {
+                        "dataset" : self.DATASET_DIR, 
+                        "holdout_dataset" : holdout_data,
+                        "type" : "baseline",
+                        "n_samples" : len(self.df),
+                        }
+
+                    all_settings.append(dict(
+                            inp = fea_name,
+                            out = lbl,
+                            trial = trial_i,
+                            train_data = df_train_i,
+                            test_data = df_test_i,
+                            inp_fea_list = fea_cols,
+                            holdout_data = df_holdout_i,
+                            cv = inner_CV,
+                            results_out_dir=results_out_dir,
+                            metric_name=metric_name,
+                            random_seed=random_seed, 
+                            verbose=verbose,
+                            results_kwargs= {
+                                "dataset" : self.DATASET_DIR,
+                                "holdout_dataset" : holdout_data,
+                                "type" : "baseline",
+                                "n_samples" : len(self.df),
+                                "n_samples_test" : len(df_test_i)}
+                                ))
         
-        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.OUT_DIR_SUF)}\
+        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR)}\
 \n ... running a total of {len(all_settings)} different settings of \
-[input] x [output] x [CV] and saving the result at {self.OUT_DIR_SUF}")
+[input] x [output] x [CV] and saving the result at {self.DATASET_DIR}")
         
         # run each model fit in parallel
+        if n_jobs is None: n_jobs = os.cpu_count()-2
         with Parallel(n_jobs=n_jobs) as parallel:
             parallel(
                 delayed(
-                    self._fit_contrib_estimator)(
-                        **settings,
-                        df_csv_path=df_csv_path,
-                        CV=CV,
-                        results_out_dir=results_out_dir,
-                        metric_name=metric_name,
-                        random_seed=random_seed, verbose=verbose-1, 
-                        results_kwargs=for_result_out
-                    ) for settings in tqdm(all_settings))
+                    self._fit_contrib_estimator)(**settings) for settings in tqdm(all_settings))
 
         # merge run_*.csv into one run.csv
         df_out = pd.concat([pd.read_csv(csv) for csv in glob(f"{results_out_dir}/run-bsl_*.csv")], 
@@ -767,43 +812,63 @@ self.load_generated_dataset()"
         self.results["baseline_results"]= df_out
         return df_out
     
+    def _split_dataset(self, 
+                       df_data, stratify_by, 
+                       df_test_data=None,
+                       CV=1, random_seed=42, verbose=False):
+        """Split the dataset into training, validation, and test sets."""
+        #TODO change label to categorical if required
+        # df['label'] = pd.factorize(df[label])[0]
+        
+        df_splits = []
+        stratify_by = df_data[stratify_by]
+        # if n_trials=1 then just split training data into 80% train and 20% validation sets
+        if CV == 1:
+            df_train, df_test = train_test_split(df_data, test_size=0.2,
+                                                 stratify=stratify_by, 
+                                                 random_state=random_seed)
+            df_splits.append((df_train, df_test))
+        else: # split into 'CV' folds 
+            skf = StratifiedKFold(n_splits=CV, 
+                                  shuffle=True, random_state=random_seed)
+            
+            for train_idx, test_idx in skf.split(df_data, stratify_by):
+                df_splits.append((df_data.iloc[train_idx], 
+                                  df_data.iloc[test_idx])) # same test data for all folds
+        
+        return df_splits
+    
 
-    # run one using settings
+
     def _fit_contrib_estimator(
         self,
-        trial, label, features, 
-        feature_set_name,
-        metric_name,
-        df_csv_path,
-        CV, results_out_dir,
-        random_seed, verbose, results_kwargs):
+        train_data, test_data,
+        inp, out, trial, 
+        cv, metric_name, 
+        inp_fea_list,
+        holdout_data,
+        results_out_dir,
+        random_seed, verbose, 
+        results_kwargs):
         ''' run one baseline linear model for the given 
         [label, features] with 'trial' number of cross-validation folds''' 
-        data = []
-        # split the dataset for training, validation, and test from raw dataset
-        for data_split in split_dataset(df_csv_path, label, 
-                                        CV, trial, 
-                                        random_seed, 
-                                        verbose=verbose>1):
-            # get the input and output
-            X = data_split[features]
-            y = data_split[label].values
-            data.append([X, y])
-        # display(data)
                 
         if verbose>1: 
-            print(f'Features: {feature_set_name}')
-            print(f'Input features: {data[0][0].columns.tolist()}')
-            print(f'Output label  : {label}')
+            print(f'Features: {inp}')
+            print(f'Input features: {inp_fea_list}')
+            print(f'Output label  : {out}')
 
         # run logistic regression and linear regression for tabular dataset
-        compute_shap = feature_set_name in ["attr_all"] #"attr_superset", 
-        results_dict, model_config = self._run_lreg(data,
+        compute_shap = inp in ["attr_all"] #"attr_superset", 
+        results_dict, model_config = self._run_lreg(train_data, test_data,
+                                                    X_cols=inp_fea_list, y_col=out,
+                                                    cv=cv, n_jobs=5,
+                                                    holdout_data=holdout_data,
                                                     compute_shap=compute_shap,
-                                                    metric_name=metric_name)
+                                                    metric_name=metric_name,
+                                                    random_seed=random_seed)
         if verbose>1:
-            print(f"Train score: {results_dict['train_metric']:>8.4f} "
-                  f"Val   score: {results_dict['val_metric']:>8.4f} "
+            print(f"Train score: {results_dict['train_metric']:>8.4f} \t"
                   f"Test  score: {results_dict['test_metric']:>8.4f}")
 
         if compute_shap:
@@ -813,41 +878,44 @@ self.load_generated_dataset()"
             results_dict.pop('shap_contrib_scores')
 
         result = {
-            "inp" : feature_set_name, 
-            "out" : label,
-            "trial" : trial,
+            "inp": inp, "out": out, "trial": trial,
+            **results_dict,
+            "inp_fea_list":inp_fea_list, "inner_cv": cv, "random_seed": random_seed,
             **model_config,
             **results_kwargs,
-            **results_dict,
         }
         
         # save the results as a csv file
         pd.DataFrame([result]).to_csv(
-            f"{results_out_dir}/run-bsl_lbl-{label}_inp-{feature_set_name}_{trial}-of-{CV}_{model_config['model']}.csv", 
+            f"{results_out_dir}/run-bsl_out-{out}_inp-{inp}_{model_config['model']}_{trial}.csv", 
                   index=False)
-        
+    
 
-    # TODO refactor for cleaner code
+    
     def _run_lreg(self, 
-                 data, compute_shap=False, 
-                 random_state=None,
-                 metric_name="r2"):
+                  df_train, df_test,
+                  X_cols, y_col,
+                  cv=5, n_jobs=5,
+                  holdout_data=None,
+                  compute_shap=False, 
+                  random_seed=None,
+                  metric_name="r2"):
         
         results = {}
-
-        (data_train, target_train), (data_val, target_val), (data_test, target_test) = data
         
+        # split the data into input features and output labels
+        train_X, train_y = df_train[X_cols], df_train[y_col]
+        test_X, test_y = df_test[X_cols], df_test[y_col]
+
+        # filter continuous vs categorical columns
         cat_col_names_selector = selector(dtype_include=object)
         cont_col_names_selector = selector(dtype_exclude=object)
         
+        cont_col_names = cont_col_names_selector(train_X)
+        cat_col_names = cat_col_names_selector(train_X)
+
         categorical_preprocessor = OneHotEncoder(handle_unknown='ignore')
         continuous_preprocessor = StandardScaler()
-        
-        # select continuous columns
-        cont_col_names = cont_col_names_selector(data_train)
-        
-        # select categorical columns
-        cat_col_names = cat_col_names_selector(data_train)
         preprocessor = ColumnTransformer(
             [
                 ("one-hot-encoder", categorical_preprocessor, cat_col_names),
@@ -856,12 +924,12 @@ self.load_generated_dataset()"
         )
         
         # TODO Refactoring needed
-        n_classes = len(set(target_train))
+        n_classes = train_y.nunique()
         # binary labels
         if n_classes == 2: 
             model_name = 'logistic_regression'
             pipe = make_pipeline(preprocessor, 
-                                LogisticRegression(max_iter=2000, random_state=random_state,
+                                LogisticRegression(max_iter=2000, random_state=random_seed,
                                                     penalty='l2',  solver='lbfgs'))
             parameters = {'logisticregression__C': [1/0.5,1,1/5, 1/10]}
             if metric_name.lower() == "r2": 
@@ -870,15 +938,14 @@ self.load_generated_dataset()"
             else:
                 metric = metric_name
             
-        
         # multiclass labels
         elif n_classes <= 5:
             model_name = 'multinomial_logistic_regression' 
             pipe = make_pipeline(preprocessor, 
-                                LogisticRegression(max_iter=2000, random_state=random_state, 
+                                LogisticRegression(max_iter=2000, random_state=random_seed, 
                                                     multi_class='multinomial', 
                                                     penalty='l2', solver='lbfgs'))
-            parameters = {'logisticregression__C': [1/0.5,1,1/5,1/10]}
+            parameters = {'logisticregression__C': [1/0.5, 1, 1/5 ,1/10]}
             if metric_name.lower() == "r2": 
                 metric_name = "r2-pseudo"
                 metric = make_scorer(d2_metric_probas, needs_proba=True)
@@ -889,37 +956,38 @@ self.load_generated_dataset()"
         else: # TODO test this
             model_name = 'linear_regression'
             pipe = make_pipeline(preprocessor, 
-                                Ridge(random_state=random_state))
-            parameters = {'ridge__alpha': [0.1,0.5,1,5]}
+                                Ridge(random_state=random_seed))
+            parameters = {'ridge__alpha': [0.1, 0.5, 1, 5]}
             metric = metric_name
         
+        # Train and fit logistic regression model with hyperparameter tuning
         # Use GridSearchCV to find the optimal hyperparameters for the pipeline
-        clf = GridSearchCV(pipe, param_grid=parameters, scoring=metric)
+        clf = GridSearchCV(pipe, param_grid=parameters,
+                           cv=cv, n_jobs=n_jobs, 
+                           refit=True, # refit the best model on the entire training set
+                           scoring=metric)
         
-        # Train and fit logistic regression model
-        clf.fit(data_train, target_train)
+        clf.fit(train_X, train_y)
         
         # Predict using the trained model
-        results.update({"train_metric": clf.score(data_train, target_train),
-                        "val_metric": clf.score(data_val, target_val),
-                        "test_metric": clf.score(data_test, target_test)})
-        tr_acc = clf.score(data_train, target_train)
-        vl_acc = clf.score(data_val, target_val)
-        te_acc = clf.score(data_test, target_test)
+        results.update({"train_metric": clf.score(train_X, train_y),
+                        "test_metric": clf.score(test_X, test_y)})
+        # if an additional holdout dataset is provided then also estimate the score on it
+        if holdout_data is not None:
+            results.update({"holdout_metric": clf.score(holdout_data[X_cols], 
+                                                        holdout_data[y_col])})
 
         # SHAP explanations
         shap_contrib_scores = None
         if compute_shap:
             preprocessing, best_model = clf.best_estimator_[:-1], clf.best_estimator_[-1]
             # print("[D] best model = ", best_model)
-            data_train_processed = preprocessing.transform(data_train)
-            data_val_processed = preprocessing.transform(data_val)
-            data_test_processed = preprocessing.transform(data_test)
+            data_train_processed = preprocessing.transform(train_X)
+            data_test_processed = preprocessing.transform(test_X)
             all_data_processed = np.concatenate((data_train_processed,
-                                                data_val_processed, 
                                                 data_test_processed), axis=0)
             # transform the existing feature_names to include the one-hot encoded features
-            feature_names = data_train.columns.tolist()
+            feature_names = train_X.columns.tolist()
             new_feature_names = preprocessing['columntransformer'].get_feature_names_out(feature_names)
             n_feas = len(new_feature_names)
             # remove preprocessor names from feature names
@@ -971,20 +1039,8 @@ self.load_generated_dataset()"
 
         settings = {"model":model_name, "metric":metric_name, "model_config":pipe }
         return results, settings
-##### code for using shapr instead of shap
-# import shaprpy
-#         setattr(best_model, 'feature_names_in_',  np.array(new_feature_names))
-#         setattr(best_model, 'n_features_in_',  len(new_feature_names))
-#         df_shapr, _, _, _ = shaprpy.explain(model = best_model,
-#                                             x_train = pd.DataFrame(data_train_processed, columns=new_feature_names),
-#                                             x_explain = pd.DataFrame(all_data_processed, columns=new_feature_names),
-#                                             approach = 'empirical',
-#                                             n_combinations = 1000,
-#                                             prediction_zero = data_train_processed.mean().item()
-#                                             )
-#         # separate the base_shap in the df_shapr
-#         base_shap_values = df_shapr['none']
-#         shap_values = df_shapr.drop(columns=['none']).values
+
+
 
     def _get_feature_cols(self,
                           feature_types, lbl=''):
