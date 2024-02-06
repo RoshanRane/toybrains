@@ -185,17 +185,18 @@ def show_contrib_table(dfs_results,
     if filter_rows:
         for col, vals in filter_rows.items():
             dfs = dfs[dfs[col].isin(vals)]
+
     if filter_cols:
         dfs = dfs[grp_by+filter_cols]
-
-    filter_cols = dfs.filter(regex='_metric$').columns.tolist() + dfs.filter(regex='^shap__').columns.tolist()
+        
+    filter_cols = dfs.filter(regex='^score_').columns.tolist() + dfs.filter(regex='^shap__').columns.tolist()
     desc = dfs[grp_by+filter_cols].groupby(grp_by).mean()
 
     # format to percentages
     func = lambda s: int(s*100) if pd.notnull(s) else -1
     desc = desc.map(func)
     print("All results are shown in percentage (%)")
-    
+
     return desc.style.bar(vmin=0, vmax=100, color=color) 
 
 

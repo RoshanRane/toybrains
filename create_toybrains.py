@@ -25,7 +25,7 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import make_scorer
+from sklearn.metrics import make_scorer, get_scorer, get_scorer_names
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from scipy.special import logit
 
@@ -659,7 +659,7 @@ class ToyBrainsData:
                                                  "attr_subsets", 
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
-                            metric_name="r2",
+                            metrics=["r2", "balanced_accuracy", "roc_auc"],
                             holdout_data=None,
                             outer_CV=5, inner_CV=5, n_jobs=None, 
                             verbose=1,
@@ -696,8 +696,9 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
         assert len(self.df)>0 and hasattr(self, "DATASET_DIR"), "first generate the dataset table \
 using self.generate_dataset_table() method or load an already generated dataset using \
 self.load_generated_dataset()"  
-        assert metric_name in sklearn.metrics.get_scorer_names(), f"metric_name '{metric_name}' is invalid.\
-It should be one of the sklearn.metrics.get_scorer_names()"
+        for metric in metrics:
+            assert metric in sklearn.metrics.get_scorer_names(), f"metric_name '{metric}' is invalid.\
+    It should be one of the sklearn.metrics.get_scorer_names()"
         
         start_time = datetime.now()
 
@@ -706,11 +707,13 @@ It should be one of the sklearn.metrics.get_scorer_names()"
         assert len(df_csv_path)==1, f"In {self.DATASET_DIR}, either no dataset tables were found or more than 1 tables were found = {df_csv_path}."
         df_data = pd.read_csv(df_csv_path[0]).set_index("subjectID")
         # load also the test dataset if provided
-        df_holdout = None
+        df_holdout = {}
         if holdout_data is not None:
-            df_hold_csv_path = glob(f"{holdout_data}/toybrains_*.csv")
-            assert len(df_hold_csv_path)!=1, f"In {self.holdout_data}, either no dataset tables were found or more than 1 tables were found = {df_hold_csv_path}."
-            df_holdout = pd.read_csv(df_hold_csv_path[0]).set_index("subjectID")
+            for holdout_name, holdout_data_i in holdout_data.items():
+                df_hold_csv_path = glob(f"{holdout_data_i}/toybrains_*.csv")
+                assert len(df_hold_csv_path)==1, f"In {holdout_data}, either no dataset tables were found or more than 1 tables were found = {df_hold_csv_path}."
+                df_holdout_i = pd.read_csv(df_hold_csv_path[0]).set_index("subjectID")
+                df_holdout.update({holdout_name: df_holdout_i})
 
         labels = []
         if "lbls" in output_labels:
@@ -745,7 +748,6 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                 # only select the input features and the label in the data table
                 data_columns = fea_cols + [lbl]
                 df_data_i = df_data[data_columns]
-                df_holdout_i = df_holdout[data_columns] if df_holdout is not None else None
 
                 # split the dataset into tuples of training, and test sets
                 datasplits = self._split_dataset(
@@ -755,11 +757,12 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                 
                 for trial_i, (df_train_i, df_test_i) in enumerate(datasplits):
                     
-                    for_result_out = {
+                    other_kwargs = {
                         "dataset" : self.DATASET_DIR, 
-                        "holdout_dataset" : holdout_data,
+                        "holdout_datasets" : list(holdout_data.items()) if holdout_data is not None else "None",
                         "type" : "baseline",
                         "n_samples" : len(self.df),
+                        "n_samples_test" : len(df_test_i)
                         }
 
                     all_settings.append(dict(
@@ -769,30 +772,24 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                             train_data = df_train_i,
                             test_data = df_test_i,
                             inp_fea_list = fea_cols,
-                            holdout_data = df_holdout_i,
+                            holdout_data = df_holdout,
                             cv = inner_CV,
                             results_out_dir=results_out_dir,
-                            metric_name=metric_name,
+                            metrics=metrics,
                             random_seed=random_seed, 
                             verbose=verbose,
-                            results_kwargs= {
-                                "dataset" : self.DATASET_DIR,
-                                "holdout_dataset" : holdout_data,
-                                "type" : "baseline",
-                                "n_samples" : len(self.df),
-                                "n_samples_test" : len(df_test_i)}
-                                ))
+                            results_kwargs=other_kwargs))
         
         if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR)}\
 \n ... running a total of {len(all_settings)} different settings of \
 [input] x [output] x [CV] and saving the result at {self.DATASET_DIR}")
         
         # run each model fit in parallel
-        if n_jobs is None: n_jobs = os.cpu_count()-2
+        if n_jobs is None: n_jobs = os.cpu_count()-1
         with Parallel(n_jobs=n_jobs) as parallel:
             parallel(
                 delayed(
-                    self._fit_contrib_estimator)(**settings) for settings in tqdm(all_settings))
+                    self._fit_contrib_estimator)(**settings) for settings in (all_settings))
 
         # merge run_*.csv into one run.csv
         df_out = pd.concat([pd.read_csv(csv) for csv in glob(f"{results_out_dir}/run-bsl_*.csv")], 
@@ -844,7 +841,7 @@ It should be one of the sklearn.metrics.get_scorer_names()"
         self,
         train_data, test_data,
         inp, out, trial, 
-        cv, metric_name, 
+        cv, metrics, 
         inp_fea_list,
         holdout_data,
         results_out_dir,
@@ -854,9 +851,8 @@ It should be one of the sklearn.metrics.get_scorer_names()"
         [label, features] with 'trial' number of cross-validation folds''' 
                 
         if verbose>1: 
-            print(f'Features: {inp}')
-            print(f'Input features: {inp_fea_list}')
-            print(f'Output label  : {out}')
+            print(f'Input Features :({inp}) {inp_fea_list}')
+            print(f'Output label   : {out}')
 
         # run logistic regression and linear regression for tabular dataset
         compute_shap = inp in ["attr_all"] #"attr_superset", 
@@ -865,11 +861,8 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                                                     cv=cv, n_jobs=5,
                                                     holdout_data=holdout_data,
                                                     compute_shap=compute_shap,
-                                                    metric_name=metric_name,
+                                                    metrics=metrics,
                                                     random_seed=random_seed)
-        if verbose>1:
-            print(f"Train score: {results_dict['train_metric']:>8.4f} \t"
-                  f"Test  score: {results_dict['test_metric']:>8.4f}")
 
         if compute_shap:
             # extract the SHAP scores and store as individual columns
@@ -899,7 +892,7 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                   holdout_data=None,
                   compute_shap=False, 
                   random_seed=None,
-                  metric_name="r2"):
+                  metrics=["r2"]):
         
         results = {}
         
@@ -932,11 +925,6 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                                 LogisticRegression(max_iter=2000, random_state=random_seed,
                                                     penalty='l2',  solver='lbfgs'))
             parameters = {'logisticregression__C': [1/0.5,1,1/5, 1/10]}
-            if metric_name.lower() == "r2": 
-                metric_name = "r2-pseudo"
-                metric = make_scorer(d2_metric_probas, needs_proba=True)
-            else:
-                metric = metric_name
             
         # multiclass labels
         elif n_classes <= 5:
@@ -946,11 +934,6 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                                                     multi_class='multinomial', 
                                                     penalty='l2', solver='lbfgs'))
             parameters = {'logisticregression__C': [1/0.5, 1, 1/5 ,1/10]}
-            if metric_name.lower() == "r2": 
-                metric_name = "r2-pseudo"
-                metric = make_scorer(d2_metric_probas, needs_proba=True)
-            else:
-                metric = metric_name
             
         # regression label
         else: # TODO test this
@@ -958,24 +941,32 @@ It should be one of the sklearn.metrics.get_scorer_names()"
             pipe = make_pipeline(preprocessor, 
                                 Ridge(random_state=random_seed))
             parameters = {'ridge__alpha': [0.1, 0.5, 1, 5]}
-            metric = metric_name
         
         # Train and fit logistic regression model with hyperparameter tuning
         # Use GridSearchCV to find the optimal hyperparameters for the pipeline
         clf = GridSearchCV(pipe, param_grid=parameters,
                            cv=cv, n_jobs=n_jobs, 
                            refit=True, # refit the best model on the entire training set
-                           scoring=metric)
+                           ) # scoring=metric use the default of the sklearn model
         
         clf.fit(train_X, train_y)
         
-        # Predict using the trained model
-        results.update({"train_metric": clf.score(train_X, train_y),
-                        "test_metric": clf.score(test_X, test_y)})
-        # if an additional holdout dataset is provided then also estimate the score on it
-        if holdout_data is not None:
-            results.update({"holdout_metric": clf.score(holdout_data[X_cols], 
-                                                        holdout_data[y_col])})
+        # estimate all requested metrics using the best model
+        for metric_name in metrics:
+            # if classification then use d2_metric_probas instead of r2
+            if metric_name.lower() == "r2" and n_classes <= 5: 
+                metric_fn = make_scorer(d2_metric_probas, needs_proba=True)
+            else:
+                metric_fn = get_scorer(metric_name)
+            
+            results.update({f"score_train_{metric_name}": metric_fn(clf, train_X, train_y),
+                            f"score_test_{metric_name}": metric_fn(clf, test_X, test_y)})
+            
+            # if an additional holdout dataset is provided then also estimate the score on it
+            if holdout_data is not None and len(holdout_data)>0:
+                for holdout_name, holdout_data_i in holdout_data.items():
+                    results.update({f"score_test_{holdout_name}_{metric_name}": 
+                                    metric_fn(clf, holdout_data_i[X_cols], holdout_data_i[y_col])})
 
         # SHAP explanations
         shap_contrib_scores = None
@@ -1037,7 +1028,7 @@ It should be one of the sklearn.metrics.get_scorer_names()"
                                 for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
             results.update({"shap_contrib_scores": shap_contrib_scores})
 
-        settings = {"model":model_name, "metric":metric_name, "model_config":pipe }
+        settings = {"model":model_name, "model_config":pipe }
         return results, settings
 
 
