@@ -52,6 +52,12 @@ assert os.path.isdir(DEEPREPVIZ_REPO) and os.path.exists(DEEPREPVIZ_REPO+'/DeepR
 if DEEPREPVIZ_REPO not in sys.path:
     sys.path.append(DEEPREPVIZ_REPO)
 from DeepRepViz import DeepRepViz
+
+
+DEEPREPVIZ_BACKEND = abspath(join(DEEPREPVIZ_REPO, "application/backend/deep_confound_control/core/")) 
+assert os.path.isdir(DEEPREPVIZ_BACKEND) and os.path.exists(DEEPREPVIZ_BACKEND+'/DeepRepVizBackend.py'), f"No DeepRepViz repository found in {DEEPREPVIZ_BACKEND}. Add the correct relative path to the backend to the 'DEEPREPVIZ_BACKEND' global variable."
+if DEEPREPVIZ_BACKEND not in sys.path:
+    sys.path.append(DEEPREPVIZ_BACKEND)
 from DeepRepVizBackend import DeepRepVizBackend
 
 
@@ -127,7 +133,7 @@ class LightningModel(L.LightningModule):
                       on_epoch=True, on_step=False)
         return labels, preds
         
-    def predict_step(self, batch, batch_idx):
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
         # DeepRepViz returns ids and the normal batch outputs as tuples
         ids, batch = batch
         true_labels, logits, metrics = self._shared_step(batch)
@@ -207,7 +213,7 @@ def fit_DL_model(dataset_path, label_col,
                     )
     
     val_dataset = ToyBrainsDataloader(
-        img_names = df_val[ID_col].values, # TODO change hardcoded
+        img_names = df_val[ID_col].values, 
         labels = df_val[label_col].values,
         img_dir = dataset_path+'/images',
         transform = transforms.Compose([transforms.ToTensor()])
@@ -220,7 +226,7 @@ def fit_DL_model(dataset_path, label_col,
     
     df_test = datasplit_df[datasplit_df[split_col]=='test']
     test_dataset = ToyBrainsDataloader(
-        img_names = df_test[ID_col].values, # TODO change hardcoded
+        img_names = df_test[ID_col].values, 
         labels = df_test[label_col].values,
         img_dir = dataset_path+'/images',
         transform = transforms.Compose([transforms.ToTensor()])
@@ -234,26 +240,34 @@ def fit_DL_model(dataset_path, label_col,
     if show_batch:
         viz_batch(val_loader, title="Validation data")
     
-    # create a dataloader for DeepRepViz with the whole data and no shuffle
-    # collect the values for deeprepviz
-    IDs = datasplit_df[ID_col].values
-    expected_labels = datasplit_df[LABEL_COL].values
-    datasplits = datasplit_df[split_col].values
-
-    drv_loader_kwargs = dict(
-                    img_dir=dataset_path+'/images',
-                    img_names=IDs,
-                    labels=expected_labels,
-                    transform=transforms.ToTensor())
-    
-    deeprepviz_kwargs = dict(
-                    dataloader_class=ToyBrainsDataloader, 
-                    dataloader_kwargs=drv_loader_kwargs,
-                    expected_IDs=IDs, 
-                    expected_labels=expected_labels, 
-                    datasplits=datasplits,
-                    hook_layer=-1,
-                    debug=False)
+    # create dataloaders for DeepRepViz no shuffle
+    train_dataset = {
+            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
+                                    img_names=df_train[ID_col].values,
+                                    labels=df_train[LABEL_COL].values,
+                                    transform=transforms.ToTensor()),
+            "expected_IDs":df_train[ID_col].values, 
+            "expected_labels":df_train[LABEL_COL].values, 
+        }
+    test_datasets = {
+        'val': {
+            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
+                                    img_names=df_val[ID_col].values,
+                                    labels=df_val[LABEL_COL].values,
+                                    transform=transforms.ToTensor()),
+            "expected_IDs":df_val[ID_col].values,
+            "expected_labels":df_val[LABEL_COL].values
+                },
+        'test': {
+            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
+                                    img_names=df_test[ID_col].values,
+                                    labels=df_test[LABEL_COL].values,
+                                    transform=transforms.ToTensor()),
+            "expected_IDs":df_test[ID_col].values,
+            "expected_labels":df_test[LABEL_COL].values
+                },
+        # 'test2': {....} # can provide a list of test datasets #TODO test
+    }                     
 
     # load model
     model = model_class(**model_kwargs)
@@ -269,7 +283,12 @@ def fit_DL_model(dataset_path, label_col,
         logger = [logger] + additional_loggers
     
     ## Init DeepRepViz callback            
-    drv = DeepRepViz(**deeprepviz_kwargs)
+    drv = DeepRepViz(dataloader_class=ToyBrainsDataloader, 
+                    dataset_kwargs=train_dataset,
+                    datasets_kwargs_test=test_datasets,
+                    hook_layer=-1,
+                    debug=False)
+    
     callbacks = additional_callbacks + [drv]
     # add any other callbacks
     if early_stop_patience:
@@ -288,16 +307,17 @@ def fit_DL_model(dataset_path, label_col,
         val_dataloaders=val_loader)
         
     # test model
-    test_scores = trainer.test(lightning_model, verbose=False,
-                               dataloaders=test_loader,
-                               ckpt_path="best")[0]
+#     test_scores = trainer.test(lightning_model, verbose=False,
+#                                dataloaders=test_loader,
+#                                ckpt_path="best")[0]
 
-    print("Test data performance with the best model:\n\
--------------------------------------------------------\n\
-Dataset      = {} ({})\n\
-Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
-        dataset_path, dataset_name, 
-         test_scores['test_BAC']*100,  test_scores['test_D2']*100))
+#     print("Test data performance with the best model:\n\
+# -------------------------------------------------------\n\
+# Dataset      = {} ({})\n\
+# Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
+#         dataset_path, dataset_name, 
+#          clear
+# ['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
     raw_csv_path = glob(f'{dataset_path}/*{dataset_name}.csv')[0]
@@ -336,7 +356,7 @@ if __name__ == "__main__":
     DATA_DIR = os.path.abspath(args.data_dir)
     DATA_CSV = glob(DATA_DIR + '/toybrains*.csv')
     assert len(DATA_CSV)==1, f"Toybrains dataset found = {DATA_CSV}.\
- \nEnsure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo.\
+ \nEnsure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo. \
 Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     DATA_CSV = DATA_CSV[0]
     ID_COL = 'subjectID'
@@ -346,7 +366,7 @@ Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     if args.debug:
         os.system('rm -rf log/*debugmode*')
         unique_name = 'debugmode'+unique_name
-        args.max_epochs = 1
+        args.max_epochs = 2
         args.batch_size = 5
         args.k_fold = 2 if args.k_fold>2 else args.k_fold
         num_workers = 5
@@ -374,7 +394,7 @@ Available colnames = {data.columns.tolist()}"
         datasplit_df.loc[test_idxs, f'trial_{trial}'] = 'test'
     # initialize such that all data is used in the first trial
     if args.k_fold <= 1:
-        train_idxs, val_idxs = train_test_split(train_idxs, test_size=0.2, 
+        train_idxs, val_idxs = train_test_split(train_idxs, test_size=0.1, 
                                                random_state=args.random_seed)
         datasplit_df.loc[train_idxs, 'trial_0'] = 'train'
         datasplit_df.loc[val_idxs, 'trial_0'] = 'val'

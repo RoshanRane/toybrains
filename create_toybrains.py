@@ -661,7 +661,7 @@ class ToyBrainsData:
                             output_labels=["lbls", "covs"],
                             metrics=["r2", "balanced_accuracy", "roc_auc"],
                             holdout_data=None,
-                            outer_CV=5, inner_CV=5, n_jobs=None, 
+                            outer_CV=5, inner_CV=5, n_jobs=-1, 
                             verbose=1,
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
@@ -785,7 +785,6 @@ self.load_generated_dataset()"
 [input] x [output] x [CV] and saving the result at {self.DATASET_DIR}")
         
         # run each model fit in parallel
-        if n_jobs is None: n_jobs = os.cpu_count()-1
         with Parallel(n_jobs=n_jobs) as parallel:
             parallel(
                 delayed(

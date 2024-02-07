@@ -6,7 +6,7 @@ N_SAMPLES=10000
 
 echo "settings: ${DEBUG} N_FOLD=${N_FOLD} ACT_SIZE=${ACT_SIZE} N_SAMPLES=${N_SAMPLES}"
 # repeat for all 5 iterations of the dataset
-for yX in {0..0}
+for yX in {2..2}
     do
     for cX in {2..2}
         do

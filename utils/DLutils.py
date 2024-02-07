@@ -1,27 +1,15 @@
-import os, sys
-from glob import glob
+import os
 import numpy as np
-import pandas as pd
-import random
-from collections import Counter
-from sklearn.model_selection import train_test_split
 from PIL import Image
 import matplotlib.pyplot as plt
 
 # deep learning imports
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import torch.nn as nn
-import torch.nn.functional as F
 from torchmetrics import Metric
-import torchvision, torchmetrics
-from torchvision import datasets, transforms
-import lightning as L
-
-# import monai
-
+import torchvision
 # custom imports 
-from utils.dataset import split_dataset
 from utils.metrics import explained_deviance
 
 ###########################################################################################
@@ -47,32 +35,6 @@ class ToyBrainsDataloader(Dataset):
     
     def __len__(self):
         return self.labels.shape[0]
-    
-    
-# def get_toybrain_dataloader(
-#                         data_df,
-#                         images_dir="toybrains/images", 
-#                         batch_size=16, 
-#                         shuffle=True, 
-#                         num_workers=30, transform=[],
-#                         ):
-#     ''' Creates pytorch dataloader of the ToyBrainsDataloader'''
-#     dataset = ToyBrainsDataloader(
-#                 img_names = data_df["subjectID"].values, # TODO change hardcoded
-#                 labels = data_df["label"].values,
-#                 img_dir=images_dir,
-#                 transform=transforms.Compose(
-#                     [transforms.ToTensor()]+transform))
-    
-#     data_loader = DataLoader(
-#                     dataset=dataset,
-#                     batch_size=batch_size,
-#                     shuffle=shuffle,
-#                     num_workers=num_workers,
-#                     multiprocessing_context=get_context('loky'),
-#                     drop_last=True)
-    
-#     return data_loader
     
 
 ################################################################################
