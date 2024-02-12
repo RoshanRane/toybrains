@@ -33,39 +33,55 @@ def create_config_file(config_fname, covars, rules,
                        return_baseline_results=False,
                        baseline_metrics=["r2"], trials=10,
                        gen_images=False,
-                       n_jobs=-1,
-                       verbose=1):
+                       n_jobs=-1, verbose=1,
+                       overwrite_existing=False):
     
     # write the config file
-    with open(config_fname, 'w') as f:
-        pp = pprint.PrettyPrinter(indent=2, width=200, compact=True, sort_dicts=True)
-        f.write('# List of all covariates\n\
+    if os.path.exists(config_fname) and not overwrite_existing:
+        print(f"Config file '{config_fname}' already exists. Not overwriting it.")
+    else:
+        with open(config_fname, 'w') as f:
+            pp = pprint.PrettyPrinter(indent=2, width=200, compact=True, sort_dicts=True)
+            f.write('# List of all covariates\n\
 COVARS           = {}\n\
 # Rules about which covariate-state influences which generative variables\n\
 RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars), 
                                 pp.pformat(rules)))
 
     # 4) Test that the config file meets the expectation using `ToyBrainsData(config=...).show_current_config()`
-
     toy = ToyBrainsData(config=config_fname)
-
-    df = toy.generate_dataset_table(n_samples=n_samples, verbose=verbose, 
-                                    outdir_suffix=f"n_{os.path.basename(config_fname).replace('.py','')}")
+    outdir_suffix = f"n_{os.path.basename(config_fname).replace('.py','')}"
+    toy.DATASET_DIR = f"{toy.OUT_DIR}_{outdir_suffix}"
+    dataset_table_file = f"{toy.DATASET_DIR}/toybrains_{outdir_suffix}.csv"
+    if os.path.exists(dataset_table_file) and not overwrite_existing:
+        print(f"Dataset table '{dataset_table_file}' already exists. Not overwriting it.")
+    else:
+        df = toy.generate_dataset_table(n_samples=n_samples, verbose=verbose, 
+                                        outdir_suffix=outdir_suffix)
 
     if show_dag_probas:
         print(f"Config file: {config_fname}")
         display(toy.show_current_config())
     
+    images_dir = f"{toy.DATASET_DIR}/images"
     if gen_images:
-        toy.generate_dataset_images(n_jobs=n_jobs, verbose=1) # print the image gen logs always
+        if os.path.exists(images_dir) and not overwrite_existing:
+            print(f"Images directory '{images_dir}' already exists. Not overwriting it.")
+        else:
+            toy.generate_dataset_images(n_jobs=n_jobs, verbose=1) # print the image gen logs always
 
     if return_baseline_results:
-        df_results = toy.fit_contrib_estimators(
-            input_feature_sets=["attr_all", "attr_subsets", "cov_all"], 
-            output_labels=["lbls"], outer_CV=trials, inner_CV=5, n_jobs=n_jobs,
-            metrics=baseline_metrics,
-            debug=False,
-            verbose=verbose)
+        baselines_file = f"{toy.DATASET_DIR}/baseline_results.csv"
+        if os.path.exists(baselines_file) and not overwrite_existing:
+            print(f"Baseline results file '{baselines_file}' already exists. Not overwriting it.")
+        else:
+            df_results = toy.fit_contrib_estimators(
+                input_feature_sets=["attr_all", "attr_subsets", "cov_all"], 
+                output_labels=["lbls"], outer_CV=trials, inner_CV=5, n_jobs=n_jobs,
+                metrics=baseline_metrics,
+                debug=False,
+                verbose=verbose)
+            df_results.to_csv(baselines_file, index=False)
 
         return df_results
 
