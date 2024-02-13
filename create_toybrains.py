@@ -21,7 +21,10 @@ from tabulate import tabulate
 import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector as selector
-from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.linear_model import LogisticRegression, ElasticNet
+from sklearn.svm import SVC, SVR
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import GridSearchCV
@@ -659,9 +662,11 @@ class ToyBrainsData:
                                                  "attr_subsets", 
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
+                            model_name="LR", model_params={},
                             metrics=["r2", "balanced_accuracy", "roc_auc"],
                             holdout_data=None,
-                            outer_CV=5, inner_CV=5, n_jobs=-1, 
+                            compute_shap=False,
+                            outer_CV=5, n_jobs=-1, 
                             verbose=1,
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
@@ -682,8 +687,6 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
         ----------
         outer_CV: int, default : 5
             number of trials (outer cross validations) to run the model fit
-        inner_CV : int, default : 5
-            number of cross validation during GridSearchCV
         test_dataset : str, default : None
             provide a separate test dataset / holdout dataset to evaluate all the model on.
             if set to None, then the test dataset is created as 20% of the training dataset using train_test_split.
@@ -723,7 +726,8 @@ self.load_generated_dataset()"
         assert len(labels)>0, "no labels are selected to be predicted. Please select at least one label from ['lbls', 'covs']"
 
         # create the directory to store the results
-        results_out_dir = f"{self.DATASET_DIR}/baseline_results" 
+        model_params_str = self._convert_model_params_to_str(model_params)
+        results_out_dir = f"{self.DATASET_DIR}/baseline_results/{model_name}/{model_params_str}" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
         os.makedirs(results_out_dir)
         if debug: #simplify
@@ -769,12 +773,14 @@ self.load_generated_dataset()"
                             inp = fea_name,
                             out = lbl,
                             trial = trial_i,
+                            model_name = model_name,
+                            model_params = model_params,
                             train_data = df_train_i,
                             test_data = df_test_i,
                             inp_fea_list = fea_cols,
                             holdout_data = df_holdout,
-                            cv = inner_CV,
                             results_out_dir=results_out_dir,
+                            compute_shap = compute_shap,
                             metrics=metrics,
                             random_seed=random_seed, 
                             verbose=verbose,
@@ -835,14 +841,20 @@ self.load_generated_dataset()"
         return df_splits
     
 
+    def _convert_model_params_to_str(self, model_params):
+        if len(model_params)==0: return "default"
+        return "_".join([f"{k}-{v}" for k,v in model_params.items()])
+
 
     def _fit_contrib_estimator(
         self,
         train_data, test_data,
         inp, out, trial, 
-        cv, metrics, 
+        model_name, model_params,
+        metrics, 
         inp_fea_list,
         holdout_data,
+        compute_shap,
         results_out_dir,
         random_seed, verbose, 
         results_kwargs):
@@ -853,11 +865,11 @@ self.load_generated_dataset()"
             print(f'Input Features :({inp}) {inp_fea_list}')
             print(f'Output label   : {out}')
 
-        # run logistic regression and linear regression for tabular dataset
-        compute_shap = inp in ["attr_all"] #"attr_superset", 
-        results_dict, model_config = self._run_lreg(train_data, test_data,
+        # run logistic regression and linear regression for tabular dataset # TODO support SVM too
+        compute_shap = (compute_shap) and (inp in ["attr_all"]) and model_name.upper() in ['LR']  
+        results_dict, model_config = self._fit_model(train_data, test_data,
                                                     X_cols=inp_fea_list, y_col=out,
-                                                    cv=cv, n_jobs=5,
+                                                    model_name=model_name, model_params=model_params,
                                                     holdout_data=holdout_data,
                                                     compute_shap=compute_shap,
                                                     metrics=metrics,
@@ -884,15 +896,17 @@ self.load_generated_dataset()"
     
 
     
-    def _run_lreg(self, 
+    def _fit_model(self, 
                   df_train, df_test,
                   X_cols, y_col,
-                  cv=5, n_jobs=5,
+                  model_name='LR', model_params={},
                   holdout_data=None,
                   compute_shap=False, 
                   random_seed=None,
                   metrics=["r2"]):
-        
+        '''Fit a model to the given dataset and estimate the model performance using cross-validation.
+        Also, estimate the SHAP scores if compute_shap is set to True.
+        '''
         results = {}
         
         # split the data into input features and output labels
@@ -915,39 +929,62 @@ self.load_generated_dataset()"
             ]
         )
         
-        # TODO Refactoring needed
+        # set the model and its hyperparameters
         n_classes = train_y.nunique()
-        # binary labels
-        if n_classes == 2: 
-            model_name = 'logistic_regression'
-            pipe = make_pipeline(preprocessor, 
-                                LogisticRegression(max_iter=2000, random_state=random_seed,
-                                                    penalty='l2',  solver='lbfgs'))
-            parameters = {'logisticregression__C': [1/0.5,1,1/5, 1/10]}
-            
-        # multiclass labels
-        elif n_classes <= 5:
-            model_name = 'multinomial_logistic_regression' 
-            pipe = make_pipeline(preprocessor, 
-                                LogisticRegression(max_iter=2000, random_state=random_seed, 
-                                                    multi_class='multinomial', 
-                                                    penalty='l2', solver='lbfgs'))
-            parameters = {'logisticregression__C': [1/0.5, 1, 1/5 ,1/10]}
-            
-        # regression label
-        else: # TODO test this
-            model_name = 'linear_regression'
-            pipe = make_pipeline(preprocessor, 
-                                Ridge(random_state=random_seed))
-            parameters = {'ridge__alpha': [0.1, 0.5, 1, 5]}
+        regression_task = (n_classes > 5)
+        if model_name.upper() == 'LR':
+            if regression_task: # TODO test
+                if 'l1_ratio' not in model_params: model_params.update(dict(l1_ratio=0))
+                if 'alpha' not in model_params: model_params.update(dict(alpha=1.0))
+                model = ElasticNet(random_state=random_seed,
+                                   **model_params)
+            else:
+                # if no model_params are explicitly provided then default to rbf kernel 
+                if 'penalty' not in model_params: model_params.update(dict(penalty='l2'))
+                if 'C' not in model_params: model_params.update(dict(C=1.0))
+                if 'solver' not in model_params: model_params.update(dict(solver='lbfgs'))
+                # multiclass classification
+                if n_classes > 2: model_params.update(dict(multi_class='multinomial'))
+
+                model = LogisticRegression(max_iter=2000, random_state=random_seed,
+                                                **model_params) 
+        elif model_name.upper() == 'SVM':
+            # if no model_params are explicitly provided then default to rbf kernel 
+            if 'kernel' not in model_params: model_params.update(dict(kernel='rbf'))
+            if 'gamma' not in model_params: model_params.update(dict(gamma='scale'))
+            if regression_task: # TODO test
+                model = SVR(random_state=random_seed, probability=True,
+                            **model_params)
+            else:
+                model = SVC(random_state=random_seed, probability=True,
+                            **model_params)
+                
+        elif model_name.upper() == 'RF':
+            if regression_task:
+                if 'n_estimators' not in model_params: model_params.update(dict(n_estimators=200))
+                if 'max_depth' not in model_params: model_params.update(dict(max_depth=5))
+                model = RandomForestRegressor(random_state=random_seed,
+                                            **model_params)
+            else:
+                model = RandomForestClassifier(random_state=random_seed,
+                                            **model_params)
+                
+        elif model_name.upper() == 'MLP':                
+            if 'hidden_layer_sizes' not in model_params: model_params.update(dict(hidden_layer_sizes=(100,20)))
+            if 'max_iter' not in model_params: model_params.update(dict(max_iter=1000))
+            if regression_task:
+                model = MLPRegressor(random_state=random_seed, early_stopping=True,
+                                    **model_params)
+            else:
+                model = MLPClassifier(random_state=random_seed, early_stopping=True,
+                                    **model_params)
+        else:
+            ## TODO support sklearn.linear_model.RidgeClassifier, tree.DecisionTreeClassifier, svm.SVC, sklearn.svm.LinearSVC, 
+            raise ValueError(f"model_name '{model_name}' is invalid.\
+Currently supported models are ['LR', 'SVM', 'RF']")
         
-        # Train and fit logistic regression model with hyperparameter tuning
-        # Use GridSearchCV to find the optimal hyperparameters for the pipeline
-        clf = GridSearchCV(pipe, param_grid=parameters,
-                           cv=cv, n_jobs=n_jobs, 
-                           refit=True, # refit the best model on the entire training set
-                           ) # scoring=metric use the default of the sklearn model
-        
+        # Train and fit the model
+        clf = make_pipeline(preprocessor, model)
         clf.fit(train_X, train_y)
         
         # estimate all requested metrics using the best model
@@ -970,7 +1007,7 @@ self.load_generated_dataset()"
         # SHAP explanations
         shap_contrib_scores = None
         if compute_shap:
-            preprocessing, best_model = clf.best_estimator_[:-1], clf.best_estimator_[-1]
+            preprocessing, best_model = clf[:-1], clf[-1]
             # print("[D] best model = ", best_model)
             data_train_processed = preprocessing.transform(train_X)
             data_test_processed = preprocessing.transform(test_X)
@@ -1027,7 +1064,7 @@ self.load_generated_dataset()"
                                 for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
             results.update({"shap_contrib_scores": shap_contrib_scores})
 
-        settings = {"model":model_name, "model_config":pipe }
+        settings = {"model":model_name, "model_params":model_params,  "model_config":model}
         return results, settings
 
 
