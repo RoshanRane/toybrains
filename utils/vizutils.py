@@ -6,15 +6,14 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import seaborn as sns
 import matplotlib.image as mpimg
-from sklearn import datasets, linear_model
-from tqdm.notebook import tqdm
-import random
-import math
+from tqdm.auto import tqdm
+
 import json
 import matplotlib
 from  matplotlib.ticker import FuncFormatter
 from matplotlib.colors import is_color_like
 from colordict import ColorDict, rgb_to_hex
+import shap
 
 
 def show_images(img_files, n_rows=1):
@@ -352,3 +351,156 @@ def load_results_from_logdir(logsdir,
     #     logsdir_folder = dirname(dirname(normpath(logsdir)))
     #     shortname = logsdir_folder if 'deeprepvizlog' not in logsdir_folder else logsdir
     deeprepvizlogs.update({logsdir: deeprepvizlog})
+
+
+
+
+
+
+
+#################################       lblmidr-consite       #################################
+def viz_contrib_table(data, X_axes=['X->y','c->X','c->y'], 
+                      metric_col='score_test_r2',
+                      show_SHAP=False, err_style='bars',
+                      y_label_suffix=''):
+    for rel in X_axes:
+        assert rel in ['X->y','c->X','c->y'], f"invalid rel {rel}"
+        
+   
+    if isinstance(data, pd.io.formats.style.Styler):
+        data = data.data
+    df = data.copy().reset_index()
+    # shorten the 'dataset' name for the plot labels
+    df['dataset'] = df['dataset'].apply(lambda x: x.split('_')[-1])
+
+    # get the iterations of yX, cX, and cy as separate columns
+    df[['c->y','c->X','X->y']] = df['dataset'].str.split('-', expand=True)
+    for col in ['X->y','c->X','c->y']:
+        # print(col, df[col].values[0])
+        df[col] = df[col].str[-1].astype(int)
+
+    # rename the test_metric column to 'Model pred. contrib score'
+    y=f'Model-based contrib score {y_label_suffix}'
+    df = df.rename(columns={metric_col:y})
+    
+    col = 'inp'
+    col_order = ['attr_all', 'attr_shape-midr_curv, shape-midr_vol-rad', 
+                 'attr_brain-int_fill', 'cov_all'] if 'attr_all' in  df[col].unique() else df[col].unique()
+    if show_SHAP:
+        y = 'SHAP contrib score'
+        col = 'SHAP(attr)'
+        col_order = df.filter(regex='shap__').columns.tolist()
+        # select only the 'inp'=attr_all rows
+        df = df[df['inp']=='attr_all']
+        # stack the SHAP cols into a single column 'SHAP' for compatibility with seaborn relplot
+        df = df.melt(id_vars=['dataset','inp','c->y','c->X','X->y'], 
+                        value_vars=col_order, 
+                    var_name=col, value_name=y)
+    # display(df)
+    for x in X_axes:
+        if x=='X->y':
+            hue='c->X'
+            size='c->y'
+        elif x=='c->X':
+            hue='X->y'
+            size='c->y'
+        elif x=='c->y':
+            hue='X->y'
+            size='c->X'
+        else:
+            assert False, f"invalid col {x}"
+
+        sns.set(style="darkgrid")
+        g = sns.relplot(data=df, kind='line', 
+                x=x,y=y, hue=hue, style=size, size=size,
+                err_style=err_style,
+                # hue='inp', height=30, aspect=0.5,
+                col_wrap=2, col=col, palette='brg_r',
+                col_order=col_order,
+                height=5, aspect=1.5,
+            )
+        # turn on frame of the legend
+        g._legend.set_frame_on(True)
+        # set y lim to 0-100
+        # g.set(ylim=(0, 100))
+        g.fig.suptitle(f"{y} as we iteratively increase {x}", fontsize=20)
+        g.fig.subplots_adjust(top=0.9)
+
+
+def viz_contrib_table_2(df_original, 
+                        metric_name='r2', 
+                        show_raw_xticks=False, 
+                        cmap=None, 
+                        title=''):
+    
+    def get_yX_cX_cX(dataset_suffixes):
+        cy, cX, yX = zip(*dataset_suffixes)
+        # sanity check the index format
+        assert (cy[0].startswith('cy')) and (cX[0].startswith('cX')) and (yX[0].startswith('yX')), "This plot function expects the  dataset names (df.index)\
+to be of format '*_cyiii-cXjjj-yXkkk' where cy, cX, and yX are the c->y, c->X, and X->y relations respectively,\
+and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-100."
+        cy = np.array([int(i[2:]) for i in cy])
+        cX = np.array([int(i[2:]) for i in cX])
+        yX = np.array([int(i[2:]) for i in yX])
+        return cy, cX, yX
+    
+    df = df_original.copy()
+    assert df.index.name.lower() == 'dataset', f"index of the provided df should be 'dataset' but it is {df.index.name}"
+    # shorten the 'dataset' name for the plot labels to only contain its suffix with cy, cX, yX
+    df.index = df.index.map(lambda x: x.split('_')[-1])
+    # sort the X axis by 100*(X<-y) + 10*(X<-c * c->y)/2 + cX
+    cy, cX, yX = get_yX_cX_cX(df.index.str.split('-', expand=True))
+    sort_order = yX + (cy*cX)/1000 + cX/10000 + cy/1000 
+    df = df.iloc[sort_order.argsort()]
+
+    # plot with seaborn lineplot
+    sns.set_style("ticks")
+    f, ax = plt.subplots(figsize=(25, 8))
+    g = sns.lineplot(df, ax=ax, 
+                     dashes=False, markers=True, alpha=0.9, linewidth=2,
+                     palette=cmap)
+
+    # make the plot pretty and readable
+    ax.set_ylabel(f"{metric_name.replace('-', ' ').replace('_',' ').title()} score", fontsize=15)
+    ax.set_xlabel(r'Increasing confound signal [$X \leftarrow c \to y$]'+'\n'+r'   &   True signal  [$X \leftarrow y$] ', fontsize=15)
+
+    
+    # on the x-axis ticks show the total X<-y and the total X<-c->y
+    last_Xy = -1
+    cy, cX, yX  = get_yX_cX_cX([xtick.get_text().split('-') for xtick in ax.get_xticklabels()])
+    poses = list(ax.get_xticks())
+    new_xticklabels = []
+    majorticks = []
+    for cy_i, cX_i, yX_i, pos_i in zip(cy, cX, yX, poses):
+        # add a major tick label every time the total_Xy changes
+        if cX_i == 0 and cy_i == 0:
+            majorticks.append(pos_i)
+            new_xtick = f'Xy={yX_i:03d}%      cy={cy_i:03d}%   cX={cX_i:03d}%'
+        else:
+            new_xtick = f'cy={cy_i:03d}%   cX={cX_i:03d}%'
+        new_xticklabels.append(new_xtick)
+    majorticks.append(poses[-1])
+
+    # print(ax.get_xticklabels(), new_xticklabels)       
+    ax.set_xticks(poses, new_xticklabels, rotation=90)
+
+    # vertical lines to show transition of X<-c->y
+    for x_line in majorticks:
+        ax.axvline(x_line-0.9, color='grey', ls='--', lw=1, alpha=0.5)
+        ax.vlines( x_line-0.9, 0, -0.45, color='grey', ls='--', lw=1,
+                clip_on=False,
+                transform=ax.get_xaxis_transform())
+    
+    ax.set_xlim(-1, poses[-1]+1)
+    
+    y_lines = [0, 25, 50, 75, 100]
+    if ax.get_ylim()[-1] > 30:
+        y_lines = [50, 75, 100]
+    for y_line in y_lines:
+        ax.axhline(y_line, color='grey', ls='--', lw=0.8, alpha=0.5)
+
+    if title:
+        ax.set_title(title, fontsize=20)
+
+    sns.move_legend(ax, "upper right", bbox_to_anchor=(1.0, 1.1), frameon=True, ncol=3, title='')
+    plt.setp(g.get_legend().get_texts(), fontsize='20')  # for legend text

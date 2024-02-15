@@ -2,29 +2,28 @@ import os, sys
 from copy import deepcopy
 import pprint
 from IPython.display import display
+import itertools
 
 PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PARENT_DIR not in sys.path:
     sys.path.append(PARENT_DIR) 
 from create_toybrains import ToyBrainsData
 
-def apply_tweak_rules(rules_og, tweak_rules):
+def apply_tweak_rules(rules_og, tweak_rules, i):
     rules = deepcopy(rules_og)
     for rule in (tweak_rules):
-        cov1, state1, cov2, key, change_fn = rule
-        val = rules[cov1][state1][cov2][key]
-        rules[cov1][state1][cov2][key] = change_fn(val)
+        cov1, state1, cov2, key, values_list = rule
+        rules[cov1][state1][cov2][key] = values_list[i]
     return rules
 
-def test_tweak_rules(RULES, tweak_rules, iters=5):
+def print_tweaked_rules(RULES, tweak_rules, iters):
     rules = deepcopy(RULES)
     for i in range(iters):
-        if i>0: # don't tweak the rules in iter 0
-            rules = apply_tweak_rules(rules, tweak_rules)
         print(f"{'-'*50}\ni={i}")
-        for k in range(len(tweak_rules)):
-            key0, key1, key2, key3, _ = tweak_rules[k]
-            print(f"\t {key0} = {key1} \t--> {key2}:\t {key3} = {rules[key0][key1][key2][key3]}")
+        rules = apply_tweak_rules(rules, tweak_rules, i)
+        for tweak_rule_k in tweak_rules:
+          key0, key1, key2, key3, _ = tweak_rule_k
+          print(f"\t {key0} = {key1} \t--> {key2}:\t {key3} = {rules[key0][key1][key2][key3]}")
 
 
 def create_config_file(config_fname, covars, rules,
@@ -77,7 +76,9 @@ RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars),
         else:
             df_results = toy.fit_contrib_estimators(
                 input_feature_sets=["attr_all", "attr_subsets", "cov_all"], 
-                output_labels=["lbls"], outer_CV=trials, inner_CV=5, n_jobs=n_jobs,
+                output_labels=["lbls"], 
+                model_name="LR", model_params={},
+                outer_CV=trials, n_jobs=n_jobs,
                 metrics=baseline_metrics,
                 debug=False,
                 verbose=verbose)
