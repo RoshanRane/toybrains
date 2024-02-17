@@ -17,6 +17,7 @@ import argparse
 import importlib
 from datetime import datetime
 from tabulate import tabulate
+from slugify import slugify
 
 import sklearn
 from sklearn.compose import ColumnTransformer
@@ -27,11 +28,13 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.model_selection import GridSearchCV
+from sklearn.feature_selection import VarianceThreshold
+# from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import make_scorer, get_scorer, get_scorer_names
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from scipy.special import logit
 
+from scipy.special import logit
+import skimage.io as io
 import shap
 
 # add custom imports
@@ -52,25 +55,35 @@ class PROB_VAR:
         self.k = len(states)
         self.reset_weights()
         
-    def bump_up_weight(self, idxs=None, amt=1):
-        # if no idx given then it implies all idxs
-        if idxs is None: 
-            idxs = np.arange(self.k)
-        elif isinstance(idxs, (int,float)): # and not a list
-            idxs = [idxs]
-            
-        if isinstance(amt, (int,float)):
-            amt = [amt]*len(idxs)
-        for i,idx in enumerate(idxs):
-            try:
-                self.weights[idx] += amt[i]
-            except IndexError as e:
-                print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
-with n={self.k} states {self.states} and weights {self.weights}")
-                raise e
-        # self._smooth_weights()
-        assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
- Something failed when performing self._smooth_weights()"
+    def set_weights(self, weights):
+        self.weights = np.array(weights)
+
+    def bump_up_weight(self, weights=None, idxs=None, amt=1):
+        # if weights are directly provided then just set them
+        if weights is not None:
+            assert len(weights)==self.k, f"provided len(weights={weights}) are not equal to configured len(states={self.states})."
+            self.set_weights(weights)
+        # otherwise bump up the exisitng weight at 'idx' by 'amt'
+        else:
+            # if no idx given then it implies all idxs
+            if idxs is None: 
+                idxs = np.arange(self.k)
+            elif isinstance(idxs, (int,float)): # and not a list
+                idxs = [idxs]
+                
+            if isinstance(amt, (int,float)):
+                amt = [amt]*len(idxs)
+            for i,idx in enumerate(idxs):
+                try:
+                    self.weights[idx] += amt[i]
+                except IndexError as e:
+                    print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
+    with n={self.k} states {self.states} and weights {self.weights}")
+                    raise e
+            # self._smooth_weights()
+            assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
+    Something failed when performing self._smooth_weights()"
+        
         return self
         
     def sample(self):
@@ -143,7 +156,7 @@ class ToyBrainsData:
                         "supervised_results":None,
                         "unsupervised_results":None,
                        }
-        
+        self.IMAGES_ARR = {}
 
     ### INIT METHODS
     def _init_df(self):
@@ -658,7 +671,7 @@ class ToyBrainsData:
     
     # run baseline on both attributes and covariates
     def fit_contrib_estimators(self,
-                            input_feature_sets=["attr_all", "attr_supset",
+                            input_feature_sets=["attr_all", 
                                                  "attr_subsets", 
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
@@ -674,7 +687,6 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
     [input features] can be either:
             i) "attr_all": all input features are fed at once to predict the labels.
             ii) attr_subsets:  subsets of input features are created using the current causal graph (config file) and fed as input to individual models.
-            iii) "attr_supset": a union of all subsets of input features derived from the causal graph as fed as input at once.
             iv) cov_subsets: All other covariates are used as input features and then each subsets of covariates are created using the current causal graph (config file) and fed as input.
     [output labels] each of the covariates in the dataset.
             v) cov_all:  all available covariates (starting with 'cov_') are fed as input features at once.
@@ -710,13 +722,19 @@ self.load_generated_dataset()"
         assert len(df_csv_path)==1, f"In {self.DATASET_DIR}, either no dataset tables were found or more than 1 tables were found = {df_csv_path}."
         df_data = pd.read_csv(df_csv_path[0]).set_index("subjectID")
         # load also the test dataset if provided
-        df_holdout = {}
+        holdout_dfs_dict = {}
         if holdout_data is not None:
             for holdout_name, holdout_data_i in holdout_data.items():
                 df_hold_csv_path = glob(f"{holdout_data_i}/toybrains_*.csv")
+                # print('[D]', holdout_name, df_hold_csv_path) 
                 assert len(df_hold_csv_path)==1, f"In {holdout_data}, either no dataset tables were found or more than 1 tables were found = {df_hold_csv_path}."
                 df_holdout_i = pd.read_csv(df_hold_csv_path[0]).set_index("subjectID")
-                df_holdout.update({holdout_name: df_holdout_i})
+                holdout_dfs_dict.update({holdout_name: df_holdout_i})
+
+        # load the images of each dataset if 'images' are provided as input
+        if "images" in input_feature_sets:
+            for splitname, df_data_i in [('traintest', df_data), *holdout_dfs_dict.items()]:
+                self._load_images(df_data_i, name=splitname)
 
         labels = []
         if "lbls" in output_labels:
@@ -745,6 +763,18 @@ self.load_generated_dataset()"
             input_features_dict = self._get_feature_cols(input_feature_sets, lbl=lbl)
             
             for fea_name, fea_cols in input_features_dict.items():
+                # if input is images append the loaded image pixel arrays to the dataframe
+                if fea_name == "images":
+                    
+                    df_data = df_data.join(fea_cols['traintest']) # fea_cols is a dict {split: dataframe, ..}
+
+                    # do the same with the provided holdout data
+                    for holdout_name, df_holdout_i in holdout_dfs_dict.items():
+                        holdout_dfs_dict[holdout_name] = df_holdout_i.join(fea_cols[holdout_name])
+                        
+                    # change fea_cols to the names of the pixel columns
+                    fea_cols = fea_cols['traintest'].columns.tolist()
+
                 # if the label is in features list then remove it
                 if lbl in fea_cols: fea_cols.remove(lbl)
                 # if the new list of features is empty then skip
@@ -778,7 +808,7 @@ self.load_generated_dataset()"
                             train_data = df_train_i,
                             test_data = df_test_i,
                             inp_fea_list = fea_cols,
-                            holdout_data = df_holdout,
+                            holdout_data = holdout_dfs_dict,
                             results_out_dir=results_out_dir,
                             compute_shap = compute_shap,
                             metrics=metrics,
@@ -786,9 +816,8 @@ self.load_generated_dataset()"
                             verbose=verbose,
                             results_kwargs=other_kwargs))
         
-        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR)}\
-\n ... running a total of {len(all_settings)} different settings of \
-[input] x [output] x [CV] and saving the result at {self.DATASET_DIR}")
+        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR.rstrip('/'))}\
+\n ... running a total of {len(all_settings)} different settings of [input] x [output] x [CV]")
         
         # run each model fit in parallel
         with Parallel(n_jobs=n_jobs) as parallel:
@@ -797,7 +826,7 @@ self.load_generated_dataset()"
                     self._fit_contrib_estimator)(**settings) for settings in (all_settings))
 
         # merge run_*.csv into one run.csv
-        df_out = pd.concat([pd.read_csv(csv) for csv in glob(f"{results_out_dir}/run-bsl_*.csv")], 
+        df_out = pd.concat([pd.read_csv(csv) for csv in glob(f"{results_out_dir}/run-temp*.csv")], 
                            ignore_index=True)
         # Reorder columns and sort the final output table for readability
         col_order = ["dataset", "out", "inp", "trial", "model", "type"]
@@ -807,43 +836,16 @@ self.load_generated_dataset()"
         df_out.to_csv(f"{results_out_dir}/run.csv", index=False)
 
         # delete the temp csv files
-        os.system(f"rm {results_out_dir}/run-bsl_*.csv")
+        os.system(f"rm {results_out_dir}/run-temp*.csv")
         
         runtime = str(datetime.now()-start_time).split(".")[0]
-        if verbose>0: print(f'TOTAL RUNTIME: {runtime}')
+        if verbose>0: 
+            print(f'TOTAL fit_contrib_estimators RUNTIME: {runtime}')
+            print('--'*50)
         self.results["baseline_results"]= df_out
         return df_out
-    
-    def _split_dataset(self, 
-                       df_data, stratify_by, 
-                       df_test_data=None,
-                       CV=1, random_seed=42, verbose=False):
-        """Split the dataset into training, validation, and test sets."""
-        #TODO change label to categorical if required
-        # df['label'] = pd.factorize(df[label])[0]
-        
-        df_splits = []
-        stratify_by = df_data[stratify_by]
-        # if n_trials=1 then just split training data into 80% train and 20% validation sets
-        if CV == 1:
-            df_train, df_test = train_test_split(df_data, test_size=0.2,
-                                                 stratify=stratify_by, 
-                                                 random_state=random_seed)
-            df_splits.append((df_train, df_test))
-        else: # split into 'CV' folds 
-            skf = StratifiedKFold(n_splits=CV, 
-                                  shuffle=True, random_state=random_seed)
-            
-            for train_idx, test_idx in skf.split(df_data, stratify_by):
-                df_splits.append((df_data.iloc[train_idx], 
-                                  df_data.iloc[test_idx])) # same test data for all folds
-        
-        return df_splits
-    
 
-    def _convert_model_params_to_str(self, model_params):
-        if len(model_params)==0: return "default"
-        return "_".join([f"{k}-{v}" for k,v in model_params.items()])
+
 
 
     def _fit_contrib_estimator(
@@ -860,13 +862,17 @@ self.load_generated_dataset()"
         results_kwargs):
         ''' run one baseline linear model for the given 
         [label, features] with 'trial' number of cross-validation folds''' 
-                
+        
+        start_time = datetime.now()
         if verbose>1: 
-            print(f'Input Features :({inp}) {inp_fea_list}')
+            inp_fea_list_print = inp_fea_list
+            if len(inp_fea_list) > 10:
+                inp_fea_list_print = inp_fea_list[:3] + ["..."] + inp_fea_list[-3:]
+            print(f'Input Features :(name={inp}, n={len(inp_fea_list)}) {inp_fea_list_print}')
             print(f'Output label   : {out}')
 
         # run logistic regression and linear regression for tabular dataset # TODO support SVM too
-        compute_shap = (compute_shap) and (inp in ["attr_all"]) and model_name.upper() in ['LR']  
+        compute_shap = (compute_shap) and (model_name.upper() in ['LR'] and inp in ["attr_all"]) 
         results_dict, model_config = self._fit_model(train_data, test_data,
                                                     X_cols=inp_fea_list, y_col=out,
                                                     model_name=model_name, model_params=model_params,
@@ -884,14 +890,15 @@ self.load_generated_dataset()"
         result = {
             "inp": inp, "out": out, "trial": trial,
             **results_dict,
-            "inp_fea_list":inp_fea_list, "inner_cv": cv, "random_seed": random_seed,
+            "inp_fea_list":inp_fea_list, "random_seed": random_seed,
             **model_config,
             **results_kwargs,
+            "runtime": str(int((datetime.now()-start_time).total_seconds()))
         }
         
         # save the results as a csv file
         pd.DataFrame([result]).to_csv(
-            f"{results_out_dir}/run-bsl_out-{out}_inp-{inp}_{model_config['model']}_{trial}.csv", 
+            f"{results_out_dir}/run-temp_out-{out}_inp-{inp}_{model_config['model']}_{trial}.csv", 
                   index=False)
     
 
@@ -912,22 +919,26 @@ self.load_generated_dataset()"
         # split the data into input features and output labels
         train_X, train_y = df_train[X_cols], df_train[y_col]
         test_X, test_y = df_test[X_cols], df_test[y_col]
-
-        # filter continuous vs categorical columns
-        cat_col_names_selector = selector(dtype_include=object)
-        cont_col_names_selector = selector(dtype_exclude=object)
         
-        cont_col_names = cont_col_names_selector(train_X)
-        cat_col_names = cat_col_names_selector(train_X)
+        # when X= attr_* filter continuous vs categorical columns and scale only the categorical
+        if len(X_cols)<100:
+            cat_col_names_selector = selector(dtype_include=object)
+            cont_col_names_selector = selector(dtype_exclude=object)
+            
+            cont_col_names = cont_col_names_selector(train_X)
+            cat_col_names = cat_col_names_selector(train_X)
 
-        categorical_preprocessor = OneHotEncoder(handle_unknown='ignore')
-        continuous_preprocessor = StandardScaler()
-        preprocessor = ColumnTransformer(
-            [
-                ("one-hot-encoder", categorical_preprocessor, cat_col_names),
-                ("minmax_scaler", continuous_preprocessor, cont_col_names),
-            ]
-        )
+            categorical_preprocessor = OneHotEncoder(handle_unknown='ignore')
+            continuous_preprocessor = StandardScaler()
+            preprocessor = ColumnTransformer([
+                            ("one-hot-encoder", categorical_preprocessor, cat_col_names),
+                            ("minmax_scaler", continuous_preprocessor, cont_col_names),
+                            ])
+            
+        else:
+            preprocessor = make_pipeline(
+                            VarianceThreshold(), 
+                            StandardScaler())
         
         # set the model and its hyperparameters
         n_classes = train_y.nunique()
@@ -981,10 +992,11 @@ self.load_generated_dataset()"
         else:
             ## TODO support sklearn.linear_model.RidgeClassifier, tree.DecisionTreeClassifier, svm.SVC, sklearn.svm.LinearSVC, 
             raise ValueError(f"model_name '{model_name}' is invalid.\
-Currently supported models are ['LR', 'SVM', 'RF']")
+Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
         
         # Train and fit the model
         clf = make_pipeline(preprocessor, model)
+        # print("[D] clf = ", clf)
         clf.fit(train_X, train_y)
         
         # estimate all requested metrics using the best model
@@ -1015,7 +1027,7 @@ Currently supported models are ['LR', 'SVM', 'RF']")
                                                 data_test_processed), axis=0)
             # transform the existing feature_names to include the one-hot encoded features
             feature_names = train_X.columns.tolist()
-            new_feature_names = preprocessing['columntransformer'].get_feature_names_out(feature_names)
+            new_feature_names = preprocessing.get_feature_names_out(feature_names)
             n_feas = len(new_feature_names)
             # remove preprocessor names from feature names
             new_feature_names = [name.split("__")[-1] for name in new_feature_names]
@@ -1066,7 +1078,38 @@ Currently supported models are ['LR', 'SVM', 'RF']")
 
         settings = {"model":model_name, "model_params":model_params,  "model_config":model}
         return results, settings
+        
+    
+    def _split_dataset(self, 
+                       df_data, stratify_by, 
+                       df_test_data=None,
+                       CV=1, random_seed=42, verbose=False):
+        """Split the dataset into training, validation, and test sets."""
+        #TODO change label to categorical if required
+        # df['label'] = pd.factorize(df[label])[0]
+        
+        df_splits = []
+        stratify_by = df_data[stratify_by]
+        # if n_trials=1 then just split training data into 80% train and 20% validation sets
+        if CV == 1:
+            df_train, df_test = train_test_split(df_data, test_size=0.2,
+                                                 stratify=stratify_by, 
+                                                 random_state=random_seed)
+            df_splits.append((df_train, df_test))
+        else: # split into 'CV' folds 
+            skf = StratifiedKFold(n_splits=CV, 
+                                  shuffle=True, random_state=random_seed)
+            
+            for train_idx, test_idx in skf.split(df_data, stratify_by):
+                df_splits.append((df_data.iloc[train_idx], 
+                                  df_data.iloc[test_idx])) # same test data for all folds
+        
+        return df_splits
+    
 
+    def _convert_model_params_to_str(self, model_params):
+        if len(model_params)==0: return "default"
+        return slugify("_".join([f"{k}-{v}" for k,v in model_params.items()]))
 
 
     def _get_feature_cols(self,
@@ -1110,7 +1153,7 @@ Currently supported models are ['LR', 'SVM', 'RF']")
                     features_dict.update({"attr_superset": superset})
                 features_dict.update({"attr_superset": list(set(superset))})
 
-            elif f_type == "attr_supset":
+            elif f_type == "attr_superset":
                 superset = sorted(list(set([s for subset in attr_subsets for s in subset])))
                 features_dict.update({"attr_superset": superset})
         
@@ -1133,14 +1176,39 @@ Currently supported models are ['LR', 'SVM', 'RF']")
                 features_dict.update({"attr_all": all_attr_cols})
             elif f_type == "cov_all":
                 features_dict.update({"cov_all": all_cov_cols})
+            elif f_type == "images":
+                features_dict.update({"images": self.IMAGES_ARR})
             else:
                 raise ValueError(f"{f_type} is an invalid feature_type. \
 Valid input features for the contribution estimation modelling are \
-['attr_all','attr_subsets','attr_supset','cov_all','cov_subsets']. \
+['images', 'attr_all','attr_subsets','cov_all','cov_subsets']. \
 See doc string for more info on what each tag means.")
         return features_dict
     
 
+    def _load_images(self, df_data, name='traintest'):
+        # dont load images if it is already loaded
+        if (name not in self.IMAGES_ARR) or (len(df_data)!=len(self.IMAGES_ARR[name])):
+            print(f"Loading {len(df_data)} images from disk for data={name}...")
+
+            img_files = [f"{self.DATASET_DIR}/images/{subID:05}.jpg" for subID in df_data.index]
+            with Parallel(n_jobs=-1) as parallel:
+                img_arrs = parallel(delayed(_read_img)(f) for f in img_files)
+            # verify that the parallel loading of images worked for all images
+            subIDs, img_arrs = zip(*sorted(img_arrs, key=lambda x: x[0]))
+            # zip it together in a dataframe
+            col_names = ['p_'+'-'.join(map(str, i)) for i in np.ndindex(img_arrs[0].shape)]
+            df_imgs = pd.DataFrame(np.stack(img_arrs).reshape(len(subIDs),-1), 
+                                   index=subIDs, 
+                                   columns=col_names)
+            
+            self.IMAGES_ARR.update({name: df_imgs}) 
+
+
+
+def _read_img(img_path):
+    subID = int(os.path.basename(img_path).split(".")[0])
+    return (subID, io.imread(img_path))
 
 ##############################################  END  ###################################################
 ##############################################  END  ###################################################

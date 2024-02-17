@@ -429,7 +429,6 @@ def viz_contrib_table(data, X_axes=['X->y','c->X','c->y'],
 
 def viz_contrib_table_2(df_original, 
                         metric_name='r2', 
-                        show_raw_xticks=False, 
                         cmap=None, 
                         title=''):
     
@@ -493,9 +492,9 @@ and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-
     
     ax.set_xlim(-1, poses[-1]+1)
     
-    y_lines = [0, 25, 50, 75, 100]
-    if ax.get_ylim()[-1] > 30:
-        y_lines = [50, 75, 100]
+    ymin, ymax = ax.get_ylim()
+    ysteps = (ymax-ymin)/3
+    y_lines = [ymin+ysteps, ymin+2*ysteps, ymin+3*ysteps, ymax]
     for y_line in y_lines:
         ax.axhline(y_line, color='grey', ls='--', lw=0.8, alpha=0.5)
 
