@@ -43,6 +43,7 @@ def plot_col_counts(df, title=''):
     cols = df_copy.columns 
     # convert each column to its appropriate dtype and 
     # then decide the type of plot to use for it
+    fs=12
     plottypes = {}
     
     for col in cols:
@@ -71,10 +72,10 @@ def plot_col_counts(df, title=''):
     if subplot_overflows!=0: subplot_nrows+=1
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(4*subplot_ncols,3*subplot_nrows))
+                          figsize=(3*subplot_ncols,2*subplot_nrows))
     axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
-    if title: f.suptitle(title, fontsize=16)
-    f.supylabel("Count")
+    if title: f.suptitle(title, fontsize=fs+2)
+    f.supylabel("Count", fontsize=fs)
 
     for i, ax in enumerate(axes):
         # print('[D]',col, plottypes[col])
@@ -104,13 +105,13 @@ def plot_col_counts(df, title=''):
                 
         elif plottype == 'hist':
             bins = df_copy[col].nunique()//5
-            sns.histplot(data=df_copy, x=col, ax=ax, kde=True, bins=bins) #multiple='fill'
+            sns.histplot(data=df_copy, x=col, ax=ax, kde=True, bins=bins, ) #multiple='fill'
         elif plottype == 'pie':
             cnt = df_copy[col].value_counts().sort_index()
             ax.pie(cnt, labels=cnt.index,
                     colors=sns.color_palette('pastel'), autopct='%.0f%%')
             
-        ax.set_title(col)
+        ax.set_title(col, fontsize=fs-2)
         ax.set_xlabel(None)
 
     plt.tight_layout()
@@ -176,6 +177,7 @@ def show_contrib_table(dfs_results,
     if isinstance(dfs_results, (list, tuple)): dfs = pd.concat(dfs_results).copy()
     
     # make the dataset name shorter for pretty-ness
+    dfs = dfs.dropna(subset=["dataset"])
     dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x.rstrip('/')))
 
     grp_by = ['out','inp','dataset']

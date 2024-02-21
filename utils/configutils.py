@@ -28,7 +28,7 @@ def print_tweaked_rules(RULES, tweak_rules, iters):
 
 def create_config_file(config_fname, covars, rules,
                        n_samples=1000, 
-                       show_dag_probas=False, 
+                       show_probas=False, show_dag=False, 
                        return_baseline_results=False,
                        baseline_metrics=["r2"], trials=10,
                        gen_images=False,
@@ -58,7 +58,10 @@ RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars),
         df = toy.generate_dataset_table(n_samples=n_samples, verbose=verbose, 
                                         outdir_suffix=outdir_suffix)
 
-    if show_dag_probas:
+    if show_dag==True:
+        print(f"Config file: {config_fname}")
+        display(toy.draw_dag())
+    if show_probas==True:
         print(f"Config file: {config_fname}")
         display(toy.show_current_config())
     

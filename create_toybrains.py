@@ -23,7 +23,7 @@ import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector as selector
 from sklearn.linear_model import LogisticRegression, ElasticNet
-from sklearn.svm import SVC, SVR
+from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import make_pipeline
@@ -56,42 +56,41 @@ class PROB_VAR:
         self.reset_weights()
         
     def set_weights(self, weights):
+        # if weights are directly provided then just set them
+        assert len(weights)==self.k, f"provided len(weights={weights}) are not equal to configured len(states={self.states})."
         self.weights = np.array(weights)
 
-    def bump_up_weight(self, weights=None, idxs=None, amt=1):
-        # if weights are directly provided then just set them
-        if weights is not None:
-            assert len(weights)==self.k, f"provided len(weights={weights}) are not equal to configured len(states={self.states})."
-            self.set_weights(weights)
-        # otherwise bump up the exisitng weight at 'idx' by 'amt'
-        else:
-            # if no idx given then it implies all idxs
-            if idxs is None: 
-                idxs = np.arange(self.k)
-            elif isinstance(idxs, (int,float)): # and not a list
-                idxs = [idxs]
-                
-            if isinstance(amt, (int,float)):
-                amt = [amt]*len(idxs)
-            for i,idx in enumerate(idxs):
-                try:
-                    self.weights[idx] += amt[i]
-                except IndexError as e:
-                    print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
-    with n={self.k} states {self.states} and weights {self.weights}")
-                    raise e
-            # self._smooth_weights()
-            assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
-    Something failed when performing self._smooth_weights()"
+    def bump_up_weight(self, idxs=None, amt=1):
+        '''bump up the exisitng weight at 'idx' by 'amt' '''
+        # if no idx given then it implies all idxs
+        if idxs is None: 
+            idxs = np.arange(self.k)
+        elif isinstance(idxs, (int,float)): # and not a list
+            idxs = [idxs]
+            
+        if isinstance(amt, (int,float)):
+            amt = [amt]*len(idxs)
+        for i,idx in enumerate(idxs):
+            try:
+                self.weights[idx] += amt[i]
+            except IndexError as e:
+                print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
+with n={self.k} states {self.states} and weights {self.weights}")
+                raise e
+        # self._smooth_weights()
+        assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
+Something failed when performing self._smooth_weights()"
         
         return self
         
     def sample(self):
+        # if weights are not set at all then set them to be uniform before computing the probas
+        if self.weights.sum()==0: self.weights = np.ones(self.k)
         probas = self.weights/self.weights.sum()
         return np.random.choice(self.states, p=probas).item()
     
     def reset_weights(self):
-        self.weights = np.ones(self.k)
+        self.weights = np.zeros(self.k)
         
 #     def _smooth_weights(self): 
 #         """Smooths the self.weights numpy array by taking the 
@@ -297,177 +296,169 @@ class ToyBrainsData:
     #     return CausalGraphicalModel(nodes=self.CGM_nodes, 
     #                                 edges=self.CGM_edges)
 
-    def show_current_config(self, 
-                            show_dag_probas=True):
+    def show_current_config(self):
         """
         show_attr_probas = True : shows how the sampling probability distribution of the different
                                   image attributes change for each covariate/label state. This feature
                                    is used to verify that all the intended weight changes were applied.
         """
-
+        # convert to one-to-many dict of source node to destination nodes
+        src_to_dst_map = {}
+        for src, dst in self.CGM_edges:
+            if src not in src_to_dst_map: # create a new entry
+                src_to_dst_map.update({src:[dst]})
+            else: # append to list of dst nodes
+                src_to_dst_map[src] += [dst]
         
-        # draw return a graphviz `dot` object, which jupyter can render
-        if show_dag_probas:
-            
-            # convert to one-to-many dict of source node to destination nodes
-            src_to_dst_map = {}
-            for src, dst in self.CGM_edges:
-                if src not in src_to_dst_map: # create a new entry
-                    src_to_dst_map.update({src:[dst]})
-                else: # append to list of dst nodes
-                    src_to_dst_map[src] += [dst]
-            
-            # show one plot for each src node to all it's destination node
-            for cov_name, dst_nodes in sorted(src_to_dst_map.items()):
-                cov = self.COVARS[cov_name]
-                # hack: reducing time by only taking few states when there are more than 5 states
-                cov_states = cov.states if len(cov.states)<=10 else  cov.states[::len(cov.states)//10]
-                # interatively collect the weights dist. of each dst node for every possible state of the covariate
-                df_temps = []
-                for cov_state in cov_states:
-                    fix_covar = {cov_name : cov_state}
-                    
-                    df_temp = pd.DataFrame(index=range(1000)) 
-                    for node_name in dst_nodes:
-                        self._reset_vars() 
-                        if node_name in self.GENVARS:
-                            # only trigger the change in weights caused when covariate = cov_state
-                            # do not set any other covariate state
-                            self._adjust_genvar_dists(fix_covar)
-                            node = self.GENVARS[node_name]
-                        elif node_name in self.COVARS:
-                            self._adjust_covar_dists_and_sample(fix_covar)
-                            node = self.COVARS[node_name]
-                            
-                        k = list(range(node.k))
-                        df_temp.loc[k, node_name] = node.states
-                        # normalize weights to get p-distribution 
-                        node_probas = (node.weights/node.weights.sum())*100 
-                        df_temp.loc[k, f"{node_name}_probas"] = node_probas
+        # show one plot for each src node to all it's destination node
+        for cov_name, dst_nodes in sorted(src_to_dst_map.items()):
+            cov = self.COVARS[cov_name]
+            # hack: reducing time by only taking few states when there are more than 5 states
+            cov_states = cov.states if len(cov.states)<=10 else  cov.states[::len(cov.states)//10]
+            # interatively collect the weights dist. of each dst node for every possible state of the covariate
+            df_temps = []
+            for cov_state in cov_states:
+                fix_covar = {cov_name : cov_state}
+                
+                df_temp = pd.DataFrame(index=range(1000)) 
+                for node_name in dst_nodes:
+                    self._reset_vars() 
+                    if node_name in self.GENVARS:
+                        # only trigger the change in weights caused when covariate = cov_state
+                        # do not set any other covariate state
+                        self._adjust_genvar_dists(fix_covar)
+                        node = self.GENVARS[node_name]
+                    elif node_name in self.COVARS:
+                        self._adjust_covar_dists_and_sample(fix_covar)
+                        node = self.COVARS[node_name]
                         
-                    # add the cov state to the whole df                     
-                    df_temp = df_temp.dropna(how='all')
-                    df_temp[cov_name] = cov_state
-                    if cov_states[0] in [True, False]:
-                        df_temp[cov_name] = df_temp[cov_name].astype(bool)
-                    df_temps.append(df_temp)
-                df = pd.concat(df_temps, ignore_index=True)
-                # display(df)
-
-                # create figure
-                sns.set(style="ticks")
-                sns.set_style("whitegrid")
-                fs = 12
-                f,axes = plt.subplots(1, len(dst_nodes), 
-                                      figsize=(2+2*len(dst_nodes), 3),
-                                      sharex=False, sharey=True)
-                f.suptitle(r"{}    $\longmapsto$   ".format(cov_name), fontsize=fs+2)
-                axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
-            
-                for i, (ax, node) in enumerate(zip(axes, dst_nodes)):
-                    legend = (i==(len(axes)-1))
-                    g = sns.lineplot(df, hue=cov_name, 
-                                     x=node, y=f"{node}_probas",  
-                                     ax=ax, legend=legend)
-                    # for line in g.get_lines():
-                    #     ax.fill_between(line.get_xdata(), [0], color='blue', alpha=.25)
-
-                    if legend: 
-                        # make 2 cols if there are many lagend labels
-                        sns.move_legend(g, loc="upper right", 
-                                        bbox_to_anchor=(1.6,1), frameon=True) 
-                        
-                    # set xlabel and ylabel  and title
-                    ax.set_title(node, fontsize=fs)
-                    ax.set_ylabel("Proba. dist. (%)", fontsize=fs)
-                    ax.set_ylim([0,100]) # probability
+                    k = list(range(node.k))
+                    df_temp.loc[k, node_name] = node.states
+                    # normalize weights to get p-distribution 
+                    node_probas = (node.weights/node.weights.sum())*100 
+                    df_temp.loc[k, f"{node_name}_probas"] = node_probas
                     
-                    # set the ticks to be same as the unique values in the list
-                    states = df[node].sort_values().unique().tolist() 
-                    new_tick_labels, new_ticks = [], []
-                    for i, tick in enumerate(states):
-                        if isinstance(tick, str):
-                            new_ticks.append(i)
-                            # trim the xtick labels if it is too long
-                            if len(tick)>5: tick = tick[:5]
-                            new_tick_labels.append(tick)
-                        elif isinstance(tick, float):
-                            if tick.is_integer(): tick = int(tick) 
-                            new_ticks.append(tick)
-                            new_tick_labels.append(str(tick))
-                        elif isinstance(tick, bool):
-                            new_ticks.append(tick)
-                            new_tick_labels.append(str(bool(tick)))
-                    # print("ticklabels",new_tick_labels, [t.get_text() for t in ax.get_xticklabels()])
-                    ax.set_xticks(new_ticks, labels=new_tick_labels) 
-           
-                plt.tight_layout()
-                plt.show()
+                # add the cov state to the whole df                     
+                df_temp = df_temp.dropna(how='all')
+                df_temp[cov_name] = cov_state
+                if cov_states[0] in [True, False]:
+                    df_temp[cov_name] = df_temp[cov_name].astype(bool)
+                df_temps.append(df_temp)
+            df = pd.concat(df_temps, ignore_index=True)
+            # display(df)
 
-        return self.draw_dag()
+            # create figure
+            sns.set(style="ticks")
+            sns.set_style("whitegrid")
+            fs = 12
+            f,axes = plt.subplots(1, len(dst_nodes), 
+                                    figsize=(2+2*len(dst_nodes), 3),
+                                    sharex=False, sharey=True)
+            f.suptitle(r"{}    $\longmapsto$   ".format(cov_name), fontsize=fs+2)
+            axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
+        
+            for i, (ax, node) in enumerate(zip(axes, dst_nodes)):
+                legend = (i==(len(axes)-1))
+                g = sns.lineplot(df, hue=cov_name, 
+                                    x=node, y=f"{node}_probas",  
+                                    ax=ax, legend=legend)
+                # for line in g.get_lines():
+                #     ax.fill_between(line.get_xdata(), [0], color='blue', alpha=.25)
+
+                if legend: 
+                    # make 2 cols if there are many lagend labels
+                    sns.move_legend(g, loc="upper right", 
+                                    bbox_to_anchor=(1.6,1), frameon=True) 
+                    
+                # set xlabel and ylabel  and title
+                ax.set_title(node, fontsize=fs)
+                ax.set_ylabel("Proba. dist. (%)", fontsize=fs)
+                ax.set_ylim([0,100]) # probability
+                
+                # set the ticks to be same as the unique values in the list
+                states = df[node].sort_values().unique().tolist() 
+                new_tick_labels, new_ticks = [], []
+                for i, tick in enumerate(states):
+                    if isinstance(tick, str):
+                        new_ticks.append(i)
+                        # trim the xtick labels if it is too long
+                        if len(tick)>5: tick = tick[:5]
+                        new_tick_labels.append(tick)
+                    elif isinstance(tick, float):
+                        if tick.is_integer(): tick = int(tick) 
+                        new_ticks.append(tick)
+                        new_tick_labels.append(str(tick))
+                    elif isinstance(tick, bool):
+                        new_ticks.append(tick)
+                        new_tick_labels.append(str(bool(tick)))
+                # print("ticklabels",new_tick_labels, [t.get_text() for t in ax.get_xticklabels()])
+                ax.set_xticks(new_ticks, labels=new_tick_labels) 
+        
+            plt.tight_layout()
+            plt.show()    
     
-    
+
     def draw_dag(self):
-            """dot file representation of the Causal Graphical Model (CGM)."""
-            dot = graphviz.Digraph(graph_attr={'rankdir': ''})
-            # separate out the source nodes from the destination nodes
-            src_nodes, dst_nodes = zip(*self.CGM_edges)
-            src_nodes = sorted(list(set(src_nodes)))
-            dst_nodes = sorted(list(set(dst_nodes)))
-            # middle nodes will be in both src_nodes and dst_nodes. 
-            bridge_nodes = [n for n in dst_nodes if n in src_nodes]
-            # keep these only in the src_nodes list
-            dst_nodes    = [n for n in dst_nodes if n not in src_nodes]
-            # categorize all nodes (attrib vars) into groups for easy reading
-            src_grps = sorted(list(set([node.split("_")[0] for node in src_nodes])))
-            # dont do it for bridge nodes
-            dst_grps = sorted(list(set([node.split("_")[0] for node in dst_nodes])))
+        """dot file representation of the Causal Graphical Model (CGM)."""
+        dot = graphviz.Digraph(graph_attr={'rankdir': ''})
+        # separate out the source nodes from the destination nodes
+        src_nodes, dst_nodes = zip(*self.CGM_edges)
+        src_nodes = sorted(list(set(src_nodes)))
+        dst_nodes = sorted(list(set(dst_nodes)))
+        # middle nodes will be in both src_nodes and dst_nodes. 
+        bridge_nodes = [n for n in dst_nodes if n in src_nodes]
+        # keep these only in the src_nodes list
+        dst_nodes    = [n for n in dst_nodes if n not in src_nodes]
+        # categorize all nodes (attrib vars) into groups for easy reading
+        src_grps = sorted(list(set([node.split("_")[0] for node in src_nodes])))
+        # dont do it for bridge nodes
+        dst_grps = sorted(list(set([node.split("_")[0] for node in dst_nodes])))
 
-            grp_to_rgb_map_src = {grp:(30, (60+i*100)%255, 200) for i, grp in enumerate(src_grps)} 
-            grp_to_rgb_map_dst = {grp:(200, (60+i*75)%255,  30) for i, grp in enumerate(dst_grps)}
-            grp_to_rgb_map = {**grp_to_rgb_map_src, **grp_to_rgb_map_dst}
+        grp_to_rgb_map_src = {grp:(30, (60+i*100)%255, 200) for i, grp in enumerate(src_grps)} 
+        grp_to_rgb_map_dst = {grp:(200, (60+i*75)%255,  30) for i, grp in enumerate(dst_grps)}
+        grp_to_rgb_map = {**grp_to_rgb_map_src, **grp_to_rgb_map_dst}
+        
+        def get_color_hex(grp, alpha=100):
+            r,g,b = grp_to_rgb_map[grp]
+            return f'#{r:x}{g:x}{b:x}{alpha:x}'
+        
+        # add all source nodes
+        for node in src_nodes:
+            grp = node.split("_")[0]
+            settings = {"shape": "ellipse", "group":grp, 
+                        "style":"filled", "fillcolor": get_color_hex(grp), 
+                        # "color":color_hex,"penwidth":"2"
+                        }
+            dot.node(node, node, settings)
             
-            def get_color_hex(grp, alpha=100):
-                r,g,b = grp_to_rgb_map[grp]
-                return f'#{r:x}{g:x}{b:x}{alpha:x}'
+        # add destination nodes
+        for grp in dst_grps:
+            # add each destination grp as a parent node and each sub category as child node
+            alpha = 100
+            r,g,b = grp_to_rgb_map[grp]
+            color_hex = f'#{r:x}{g:x}{b:x}{alpha:x}'
             
-            # add all source nodes
-            for node in src_nodes:
-                grp = node.split("_")[0]
-                settings = {"shape": "ellipse", "group":grp, 
-                            "style":"filled", "fillcolor": get_color_hex(grp), 
-                            # "color":color_hex,"penwidth":"2"
-                            }
-                dot.node(node, node, settings)
-                
-            # add destination nodes
-            for grp in dst_grps:
-                # add each destination grp as a parent node and each sub category as child node
-                alpha = 100
-                r,g,b = grp_to_rgb_map[grp]
-                color_hex = f'#{r:x}{g:x}{b:x}{alpha:x}'
-                
-                settings = {"shape": "ellipse", "group":grp, 
-                            "style":"filled", "fillcolor": get_color_hex(grp), 
-                            } 
-                
-                with dot.subgraph(name=f'cluster_dst') as dot_dst:
-                    dot_dst.attr(rank="dst", style="invis")
-                    with dot_dst.subgraph(name=f'cluster_dst_{grp}') as dot_c:
-                        dot_c.attr(label=grp, labelloc='b', style="dashed")
-                        for node in dst_nodes:
-                            if node.split("_")[0] == grp:
-                                dot_c.node(node, "_".join(node.split("_")[1:]), **settings)
-                
-            for a, b in self.CGM_edges:
-                # set the arrow color same as the color of the attrib variable
-                grp = b.split("_")[0]
-                dot.edge(a, b, _attributes={"color": get_color_hex(grp, alpha=200), 
-                                            "style":"bold",
-                                            # "penwidth":"2",
-                                            "arrowhead":"vee"})
+            settings = {"shape": "ellipse", "group":grp, 
+                        "style":"filled", "fillcolor": get_color_hex(grp), 
+                        } 
+            
+            with dot.subgraph(name=f'cluster_dst') as dot_dst:
+                dot_dst.attr(rank="dst", style="invis")
+                with dot_dst.subgraph(name=f'cluster_dst_{grp}') as dot_c:
+                    dot_c.attr(label=grp, labelloc='b', style="dashed")
+                    for node in dst_nodes:
+                        if node.split("_")[0] == grp:
+                            dot_c.node(node, "_".join(node.split("_")[1:]), **settings)
+            
+        for a, b in self.CGM_edges:
+            # set the arrow color same as the color of the attrib variable
+            grp = b.split("_")[0]
+            dot.edge(a, b, _attributes={"color": get_color_hex(grp, alpha=200), 
+                                        "style":"bold",
+                                        # "penwidth":"2",
+                                        "arrowhead":"vee"})
 
-            return dot
+        return dot
         
 ##########################################  methods for GENERATING DATASET    #######################################################
 #####################################################################################################################################
@@ -677,10 +668,11 @@ class ToyBrainsData:
                             output_labels=["lbls", "covs"],
                             model_name="LR", model_params={},
                             metrics=["r2", "balanced_accuracy", "roc_auc"],
+                            confound_control=[], #TODO
                             holdout_data=None,
                             compute_shap=False,
                             outer_CV=5, n_jobs=-1, 
-                            verbose=1,
+                            verbose=0,
                             random_seed=None, debug=False):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
 Fits [input features] X [output labels] X [model x cross validation folds] models where,
@@ -729,12 +721,14 @@ self.load_generated_dataset()"
                 # print('[D]', holdout_name, df_hold_csv_path) 
                 assert len(df_hold_csv_path)==1, f"In {holdout_data}, either no dataset tables were found or more than 1 tables were found = {df_hold_csv_path}."
                 df_holdout_i = pd.read_csv(df_hold_csv_path[0]).set_index("subjectID")
-                holdout_dfs_dict.update({holdout_name: df_holdout_i})
+                df_holdout_i['dataset_dir'] = holdout_data_i # required by self._load_images
+                holdout_dfs_dict.update({holdout_name: df_holdout_i}) 
 
         # load the images of each dataset if 'images' are provided as input
         if "images" in input_feature_sets:
+            df_data['dataset_dir'] = self.DATASET_DIR # required by self._load_images
             for splitname, df_data_i in [('traintest', df_data), *holdout_dfs_dict.items()]:
-                self._load_images(df_data_i, name=splitname)
+                self._load_images(df_data_i, name=splitname, verbose=verbose)
 
         labels = []
         if "lbls" in output_labels:
@@ -783,38 +777,46 @@ self.load_generated_dataset()"
                 data_columns = fea_cols + [lbl]
                 df_data_i = df_data[data_columns]
 
-                # split the dataset into tuples of training, and test sets
-                datasplits = self._split_dataset(
-                                    df_data_i, stratify_by=lbl,
-                                    CV=outer_CV,
-                                    random_seed=random_seed, verbose=verbose)
-                
-                for trial_i, (df_train_i, df_test_i) in enumerate(datasplits):
-                    
-                    other_kwargs = {
-                        "dataset" : self.DATASET_DIR, 
-                        "holdout_datasets" : list(holdout_data.items()) if holdout_data is not None else "None",
-                        "type" : "baseline",
-                        "n_samples" : len(self.df),
-                        "n_samples_test" : len(df_test_i)
-                        }
+                # perform the confound control methods only when input is images and output labels are configured 
+                valid_conf_ctrl_methods = [None]
+                if (fea_name == "images"): 
+                    if lbl in confound_control: 
+                        valid_conf_ctrl_methods += confound_control[lbl]
+                for conf_ctrl in [None] + valid_conf_ctrl_methods:
 
-                    all_settings.append(dict(
-                            inp = fea_name,
-                            out = lbl,
-                            trial = trial_i,
-                            model_name = model_name,
-                            model_params = model_params,
-                            train_data = df_train_i,
-                            test_data = df_test_i,
-                            inp_fea_list = fea_cols,
-                            holdout_data = holdout_dfs_dict,
-                            results_out_dir=results_out_dir,
-                            compute_shap = compute_shap,
-                            metrics=metrics,
-                            random_seed=random_seed, 
-                            verbose=verbose,
-                            results_kwargs=other_kwargs))
+                    # create 'outer_CV' number of dataset categorization into training, and test sets
+                    datasplits = self._split_dataset(
+                                        df_data_i, stratify_by=lbl,
+                                        CV=outer_CV,
+                                        random_seed=random_seed, verbose=verbose)
+                    
+                    for trial_i, (df_train_i, df_test_i) in enumerate(datasplits):
+                        
+                        other_kwargs = {
+                            "dataset" : self.DATASET_DIR, 
+                            "holdout_datasets" : list(holdout_data.items()) if holdout_data is not None else "None",
+                            "type" : "baseline",
+                            "n_samples" : len(self.df),
+                            "n_samples_test" : len(df_test_i)
+                            }
+
+                        all_settings.append(dict(
+                                inp = fea_name,
+                                out = lbl,
+                                trial = trial_i,
+                                model_name = model_name,
+                                model_params = model_params,
+                                conf_ctrl = conf_ctrl,
+                                train_data = df_train_i,
+                                test_data = df_test_i,
+                                inp_fea_list = fea_cols,
+                                holdout_data = holdout_dfs_dict,
+                                results_out_dir=results_out_dir,
+                                compute_shap = compute_shap,
+                                metrics=metrics,
+                                random_seed=random_seed, 
+                                verbose=verbose,
+                                results_kwargs=other_kwargs))
         
         if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR.rstrip('/'))}\
 \n ... running a total of {len(all_settings)} different settings of [input] x [output] x [CV]")
@@ -853,6 +855,7 @@ self.load_generated_dataset()"
         train_data, test_data,
         inp, out, trial, 
         model_name, model_params,
+        conf_ctrl,
         metrics, 
         inp_fea_list,
         holdout_data,
@@ -870,12 +873,14 @@ self.load_generated_dataset()"
                 inp_fea_list_print = inp_fea_list[:3] + ["..."] + inp_fea_list[-3:]
             print(f'Input Features :(name={inp}, n={len(inp_fea_list)}) {inp_fea_list_print}')
             print(f'Output label   : {out}')
+            print(f'confound control   : {conf_ctrl}')
 
         # run logistic regression and linear regression for tabular dataset # TODO support SVM too
         compute_shap = (compute_shap) and (model_name.upper() in ['LR'] and inp in ["attr_all"]) 
         results_dict, model_config = self._fit_model(train_data, test_data,
                                                     X_cols=inp_fea_list, y_col=out,
                                                     model_name=model_name, model_params=model_params,
+                                                    conf_ctrl=conf_ctrl,
                                                     holdout_data=holdout_data,
                                                     compute_shap=compute_shap,
                                                     metrics=metrics,
@@ -907,6 +912,7 @@ self.load_generated_dataset()"
                   df_train, df_test,
                   X_cols, y_col,
                   model_name='LR', model_params={},
+                  conf_ctrl=None,
                   holdout_data=None,
                   compute_shap=False, 
                   random_seed=None,
@@ -922,6 +928,7 @@ self.load_generated_dataset()"
         
         # when X= attr_* filter continuous vs categorical columns and scale only the categorical
         if len(X_cols)<100:
+            input_attrs = True
             cat_col_names_selector = selector(dtype_include=object)
             cont_col_names_selector = selector(dtype_exclude=object)
             
@@ -936,9 +943,15 @@ self.load_generated_dataset()"
                             ])
             
         else:
+            input_attrs = False
             preprocessor = make_pipeline(
                             VarianceThreshold(), 
                             StandardScaler())
+            
+        
+        # append the confound control operation to the sklearn pipeline
+        if conf_ctrl is not None: #TODO 
+            preprocessor = make_pipeline(preprocessor, conf_ctrl)
         
         # set the model and its hyperparameters
         n_classes = train_y.nunique()
@@ -962,12 +975,35 @@ self.load_generated_dataset()"
         elif model_name.upper() == 'SVM':
             # if no model_params are explicitly provided then default to rbf kernel 
             if 'kernel' not in model_params: model_params.update(dict(kernel='rbf'))
-            if 'gamma' not in model_params: model_params.update(dict(gamma='scale'))
+            if model_params['kernel'] == 'linear':
+                model_params.update(dict(penalty='l2', loss='squared_hinge', C=1.0))
+                # add predict_proba function as LinearSVC does not have it
+                def _predict_proba(self, X):
+                    logits = self.decision_function(X)
+                    probas = 1 / (1 + np.exp(-logits))
+                    return np.array([1 - probas, probas]).T
+            else:
+                if 'gamma' not in model_params: model_params.update(dict(gamma='scale'))
+
             if regression_task: # TODO test
+                if model_params['kernel']=='linear':
+                    model_params_lin = model_params.copy()
+                    model_params_lin.pop('kernel', None)
+                    model = LinearSVR(random_state=random_seed, dual='auto', **model_params_lin)
+                    model.predict_proba = lambda X: _predict_proba(model, X)
+                else:
+                    model = SVR(random_state=random_seed, probability=True,
+                            **model_params)
                 model = SVR(random_state=random_seed, probability=True,
                             **model_params)
             else:
-                model = SVC(random_state=random_seed, probability=True,
+                if model_params['kernel']=='linear':
+                    model_params_lin = model_params.copy()
+                    model_params_lin.pop('kernel', None)
+                    model = LinearSVC(random_state=random_seed, dual='auto', **model_params_lin)
+                    model.predict_proba = lambda X: _predict_proba(model, X)
+                else:
+                    model = SVC(random_state=random_seed, probability=True,
                             **model_params)
                 
         elif model_name.upper() == 'RF':
@@ -981,7 +1017,12 @@ self.load_generated_dataset()"
                                             **model_params)
                 
         elif model_name.upper() == 'MLP':                
-            if 'hidden_layer_sizes' not in model_params: model_params.update(dict(hidden_layer_sizes=(100,20)))
+            if 'hidden_layer_sizes' not in model_params:
+                if input_attrs:
+                    model_params.update(dict(hidden_layer_sizes=(200,100,20)))
+                else:
+                    model_params.update(dict(hidden_layer_sizes=(5000,100,20)))
+
             if 'max_iter' not in model_params: model_params.update(dict(max_iter=1000))
             if regression_task:
                 model = MLPRegressor(random_state=random_seed, early_stopping=True,
@@ -1186,12 +1227,14 @@ See doc string for more info on what each tag means.")
         return features_dict
     
 
-    def _load_images(self, df_data, name='traintest'):
+    def _load_images(self, df_data, name='traintest',verbose=0):
+        assert 'dataset_dir' in df_data.columns, "df_data should have a column 'dataset_dir' that points to the location of the images"
+        dataset_dir = df_data['dataset_dir'].iloc[0]
         # dont load images if it is already loaded
         if (name not in self.IMAGES_ARR) or (len(df_data)!=len(self.IMAGES_ARR[name])):
-            print(f"Loading {len(df_data)} images from disk for data={name}...")
-
-            img_files = [f"{self.DATASET_DIR}/images/{subID:05}.jpg" for subID in df_data.index]
+            if verbose>1: print(f"Loading {len(df_data)} images from disk loc '{dataset_dir}/images/*.jpg' ...")
+            
+            img_files = [f"{dataset_dir}/images/{subID:05}.jpg" for subID in df_data.index]
             with Parallel(n_jobs=-1) as parallel:
                 img_arrs = parallel(delayed(_read_img)(f) for f in img_files)
             # verify that the parallel loading of images worked for all images
