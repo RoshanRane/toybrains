@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt 
 import seaborn as sns
-from tqdm.auto import tqdm
+from tqdm import tqdm
 import joblib 
 import re
 from datetime import datetime
@@ -17,6 +17,7 @@ if os.path.abspath('../../') not in sys.path:
 from create_toybrains import ToyBrainsData
 from utils.vizutils import *
 from utils.configutils import *
+import argparse
 
 
 # for each dataset find the holdout data that are (a) an equivalent dataset with no conf signal and (b) an equivalent dataset with no true signal 
@@ -24,6 +25,7 @@ def generate_baseline_results(dataset, holdout_data=None,
                               input_feature_sets=["attr_all", "attr_subsets", "cov_all", "attr_supset"],
                               output_labels=["lbls"], 
                               model_name='LR', model_params={},
+                              confound_control=[],
                               metrics=['r2'],
                               compute_shap=True, n_jobs=-1,
                               n_trials=5, n_samples=1000, verbose=0):    
@@ -40,6 +42,7 @@ def generate_baseline_results(dataset, holdout_data=None,
             input_feature_sets=input_feature_sets,
             output_labels=output_labels, 
             model_name=model_name, model_params=model_params,
+            confound_control=confound_control,
             holdout_data=holdout_data,
             compute_shap=compute_shap,
             outer_CV=n_trials, n_jobs=n_jobs,
@@ -71,24 +74,31 @@ def strfdelta(tdelta, fmt):
 # run the full script
 if __name__ == '__main__':
 
-    # get debug mode as an command line arg
+    
+    parser = argparse.ArgumentParser()
     DEBUG = False
-    if len(sys.argv)>1:
-        DEBUG = True if sys.argv[1]=='-d' else False
+    parser.add_argument('-d', action='store_true', help='Enable debug mode')
+    parser.add_argument('--njobs', type=int, default=10, help='Number of jobs to run in parallel')
+
+    args = parser.parse_args()
+    DEBUG = args.d
+    N_JOBS = args.njobs
 
     time = datetime.now()
 
     ### Config
     MODELS = [
-        ('LR',{}),
-        # ('LR',{'penalty':'l1', 'C':1.0, 'solver':'saga'}),
-        # ('SVM',{}),
+        # ('LR',{'penalty':'l1', 'C':1.0, 'solver':'liblinear'}),
         # ('SVM',{'kernel':'linear'}),
-        # ('RF',{}),
+        # ('SVM',{}),
+        ('RF',{}),
+        ('LR',{}),
         # ('MLP',{}),
         ]
     MODEL_PARAMS = {} 
     COMPUTE_SHAP = True
+
+    CONF_CTRL = {'lbl_lesion':[]} # 'cr', 'cb', 'cb'
 
     INPUT_FEATURE_SETS = [
         "images", 
@@ -101,44 +111,43 @@ if __name__ == '__main__':
     N_SAMPLES  = 5000
     VERBOSE = 0
     N_TRIALS = 5
-    N_JOBS = 5
 
     if DEBUG:
         N_SAMPLES = 100
         VERBOSE = 2
         N_TRIALS = 2 if N_TRIALS>2 else N_TRIALS
-        N_JOBS = 1
 
     
     datasets = glob(f"dataset/*n{N_SAMPLES}_*{basefilename}*/")
-    # create tuples of each dataset and its unbiased test data (Aconf=0)
+
+    ### for each dataset find the holdout data that are (a) an equivalent dataset with no conf signal and (b) an equivalent dataset with no true signal 
     dataset_tuples = []
+    test_suffix = '_test'
+    test_nsamples = 1000
+
     for dataset in datasets:
-        dataset_noconf = re.sub('cX...', 'cX000', re.sub('cy...','cy000', dataset))
+        dataset = dataset.rstrip('/')
+        dataset_test = re.sub(f'_n{N_SAMPLES}_', f'_n{test_nsamples}_', dataset) + test_suffix
+        dataset_noconf = re.sub('cX...', 'cX000', re.sub('cy...','cy000', dataset_test))
         assert os.path.exists(dataset_noconf), f"Could not find noconf dataset {dataset_noconf} for {dataset}"
-        # force the Xy relation to be the max for the extreme test dataset
+        # also force the Xy relation to be the max
         dataset_noconf_ext = re.sub('yX...', 'yX100', dataset_noconf)
         assert os.path.exists(dataset_noconf_ext), f"Could not find noconf dataset {dataset_noconf_ext} for {dataset}"
 
-        dataset_nosignal = re.sub('yX...','yX000', dataset)
+        dataset_nosignal = re.sub('yX...','yX000', dataset_test) 
         assert os.path.exists(dataset_nosignal), f"Could not find nosignal dataset {dataset_nosignal} for {dataset}"
-        # force the X<-c->y relation to be the max for the extreme test dataset
+        # also force the X<-c->y relation to be the max
         dataset_nosignal_ext = re.sub('cX...', 'cX100', re.sub('cy...','cy100', dataset_nosignal))
         assert os.path.exists(dataset_nosignal_ext), f"Could not find nosignal dataset {dataset_nosignal_ext} for {dataset}"
         
         dataset_tuples.append((dataset, 
-                                {'no-conf': dataset_noconf,   'no-conf-ext': dataset_noconf_ext,
-                                    'no-true': dataset_nosignal, 'no-true-ext': dataset_nosignal_ext}))
+                                {'no-conf': dataset_noconf, 'no-conf_ext': dataset_noconf_ext,
+                                'no-true': dataset_nosignal, 'no-true_ext': dataset_nosignal_ext}))
             
     dataset_model_tuples = [((m, m_params),(d, hold_d)) for m, m_params in MODELS for d, hold_d in dataset_tuples]
     
-    print(f"On {len(datasets)} datasets, running {len(MODELS)} models x {N_TRIALS} trials  = {len(dataset_model_tuples)*N_TRIALS} total runs")
-
-    # convert to a generator for tqdm
-    def get_dataset_model_tuples(tups):
-        i = 0     
-        for i in range(len(tups)):         
-            yield tups[i]
+    print(f"On {len(datasets)} datasets, running {len(MODELS)} models ({[m for m,_ in MODELS]}) x {N_TRIALS} trials,\
+ with {len(CONF_CTRL)} confound control methods  = {len(dataset_model_tuples)*N_TRIALS*(1+len(CONF_CTRL))} total runs")
 
     #  generate the baseline results on generated datasets using parallel processes
     bl_results = joblib.Parallel(n_jobs=N_JOBS)(
@@ -148,11 +157,12 @@ if __name__ == '__main__':
                 input_feature_sets=INPUT_FEATURE_SETS, 
                 model_name=model_name, model_params=model_params,
                 output_labels=["lbls"],
+                confound_control=CONF_CTRL,
                 compute_shap=COMPUTE_SHAP,
-                metrics=['balanced_accuracy', 'r2', 'roc_auc'], 
+                metrics=['balanced_accuracy', 'r2', 'roc_auc', 'adjusted_mutual_info_score'], 
                 n_trials=N_TRIALS, n_jobs=N_JOBS,
                 n_samples=N_SAMPLES, verbose=VERBOSE) \
- for (model_name, model_params), (dataset, holdout_data) in tqdm(get_dataset_model_tuples(dataset_model_tuples)))
+ for (model_name, model_params), (dataset, holdout_data) in tqdm(dataset_model_tuples, total=len(dataset_model_tuples)))
 
     # print the total runtime in 
     print("Total runtime:", strfdelta(datetime.now()-time, "{days} days, {hours} Hrs: {minutes} min: {seconds} secs"))
