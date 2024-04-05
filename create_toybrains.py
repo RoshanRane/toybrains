@@ -19,26 +19,19 @@ from datetime import datetime
 from tabulate import tabulate
 from slugify import slugify
 
-import sklearn
-from sklearn.compose import ColumnTransformer
-from sklearn.compose import make_column_selector as selector
-from sklearn.linear_model import LogisticRegression, ElasticNet
-from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.feature_selection import VarianceThreshold
-# from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import make_scorer, get_scorer, get_scorer_names
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from imblearn.over_sampling import RandomOverSampler
+from imblearn.under_sampling import RandomUnderSampler
 
-from scipy.special import logit
+import sklearn
+
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+
 import skimage.io as io
-import shap
 
 # add custom imports
-from utils.metrics import d2_metric_probas
+from utils.fitmodel import fitmodel
+from utils.confounds import CounterBalance
 # from utils.vizutils import plot_col_dists
 
 import graphviz
@@ -667,13 +660,13 @@ class ToyBrainsData:
                                                  "cov_subsets"],
                             output_labels=["lbls", "covs"],
                             model_name="LR", model_params={},
+                            conf_ctrl={},
                             metrics=["r2", "balanced_accuracy", "roc_auc"],
-                            confound_control=[], #TODO
                             holdout_data=None,
                             compute_shap=False,
                             outer_CV=5, n_jobs=-1, 
                             verbose=0,
-                            random_seed=None, debug=False):
+                            random_seed=None):
         ''' run linear regression or logistic regression to estimate the expected prediction performance for a given dataset. 
 Fits [input features] X [output labels] X [model x cross validation folds] models where,
     [input features] can be either:
@@ -696,8 +689,6 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
             if set to None, then the test dataset is created as 20% of the training dataset using train_test_split.
         random_seed : int, default : 42
             random state for reproducibility
-        debug : boolean, default : False
-            debug mode
         '''
         # sanity check that the dataset table has been loaded
         assert len(self.df)>0 and hasattr(self, "DATASET_DIR"), "first generate the dataset table \
@@ -742,62 +733,61 @@ self.load_generated_dataset()"
         results_out_dir = f"{self.DATASET_DIR}/baseline_results/{model_name}/{model_params_str}" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
         os.makedirs(results_out_dir)
-        if debug: #simplify
-            n_jobs=1
-            CV=2
-            n_trials=2
-            random_seed=42
-            verbose=10
         
+        # if no confound control methods are requested then create a 'default' one
+        conf_ctrl.update({None: []})
+
         # generate the different settings of [input features] X [output labels] X [cross validation]
         all_settings = []
+
         for lbl in labels:
-            # get the respective list of input feature columns for each feature_type requested
-            # Also, exclude the label from feature columns list
-            input_features_dict = self._get_feature_cols(input_feature_sets, lbl=lbl)
-            
-            for fea_name, fea_cols in input_features_dict.items():
+            # get the respective list of input feature columns for each feature_type 
+            for fea_name, fea_cols in self._get_feature_cols(input_feature_sets, 
+                                                             lbl=lbl).items():
+
                 # if input is images append the loaded image pixel arrays to the dataframe
                 if fea_name == "images":
-                    
                     df_data = df_data.join(fea_cols['traintest']) # fea_cols is a dict {split: dataframe, ..}
-
                     # do the same with the provided holdout data
                     for holdout_name, df_holdout_i in holdout_dfs_dict.items():
                         holdout_dfs_dict[holdout_name] = df_holdout_i.join(fea_cols[holdout_name])
-                        
+            
                     # change fea_cols to the names of the pixel columns
                     fea_cols = fea_cols['traintest'].columns.tolist()
 
-                # if the label is in features list then remove it
-                if lbl in fea_cols: fea_cols.remove(lbl)
-                # if the new list of features is empty then skip
-                if len(fea_cols)==0: continue
-                # only select the input features and the label in the data table
-                data_columns = fea_cols + [lbl]
-                df_data_i = df_data[data_columns]
+                # apply a confound control methods if requested
+                for conf_ctrl_method, conf_cols in conf_ctrl.items():
 
-                # perform the confound control methods only when input is images and output labels are configured 
-                valid_conf_ctrl_methods = [None]
-                if (fea_name == "images"): 
-                    if lbl in confound_control: 
-                        valid_conf_ctrl_methods += confound_control[lbl]
-                for conf_ctrl in [None] + valid_conf_ctrl_methods:
+                    # only select the input features and the label in the data table
+                    data_columns = fea_cols + [lbl] + conf_cols
+                    df_data_i = df_data[data_columns]
 
                     # create 'outer_CV' number of dataset categorization into training, and test sets
                     datasplits = self._split_dataset(
                                         df_data_i, stratify_by=lbl,
                                         CV=outer_CV,
-                                        random_seed=random_seed, verbose=verbose)
+                                        random_seed=random_seed)
                     
                     for trial_i, (df_train_i, df_test_i) in enumerate(datasplits):
+
+                        # generate a confound controlled df_train_i datasplit
+                        df_train_i, success = self._apply_conf_ctrl(conf_ctrl_method,
+                                                           data=df_train_i, lbl=lbl,
+                                                           confs=conf_cols,
+                                                           random_state=random_seed, verbose=verbose>1)
+                        # skip if the confound control was not successful
+                        if not success: continue
                         
+                        # drop the confound columns from the train & test data
+                        df_train_i = df_train_i.drop(columns=conf_cols)
+                        df_test_i = df_test_i.drop(columns=conf_cols)
+
                         other_kwargs = {
                             "dataset" : self.DATASET_DIR, 
                             "holdout_datasets" : list(holdout_data.items()) if holdout_data is not None else "None",
-                            "type" : "baseline",
+                            "type" : f"{conf_ctrl_method}{conf_cols}" if conf_ctrl_method is not None else "baseline",
                             "n_samples" : len(self.df),
-                            "n_samples_test" : len(df_test_i)
+                            "n_samples_test" : len(df_test_i),
                             }
 
                         all_settings.append(dict(
@@ -806,7 +796,6 @@ self.load_generated_dataset()"
                                 trial = trial_i,
                                 model_name = model_name,
                                 model_params = model_params,
-                                conf_ctrl = conf_ctrl,
                                 train_data = df_train_i,
                                 test_data = df_test_i,
                                 inp_fea_list = fea_cols,
@@ -818,9 +807,9 @@ self.load_generated_dataset()"
                                 verbose=verbose,
                                 results_kwargs=other_kwargs))
         
-        if verbose>0: print(f"{'-'*50}\nEstimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR.rstrip('/'))}\
+        if verbose>0: print(f"{'-'*50}\n[parallel jobs] Estimating baseline contrib scores on dataset: {os.path.basename(self.DATASET_DIR.rstrip('/'))}\
 \n ... running a total of {len(all_settings)} different settings of [input] x [output] x [CV]")
-        
+
         # run each model fit in parallel
         with Parallel(n_jobs=n_jobs) as parallel:
             parallel(
@@ -835,6 +824,8 @@ self.load_generated_dataset()"
         df_out = df_out.sort_values(col_order) 
         col_order = col_order + [c for c in df_out.columns if c not in col_order]
         df_out = df_out[col_order] 
+        if verbose>1: print("generated results table with {} rows and {} columns.".format(*df_out.shape))
+        if verbose>2: print(df_out["dataset", "out", "inp", "trial", "model", "type", "score_test_balanced_accuracy"])
         df_out.to_csv(f"{results_out_dir}/run.csv", index=False)
 
         # delete the temp csv files
@@ -849,42 +840,89 @@ self.load_generated_dataset()"
 
 
 
+    def _apply_conf_ctrl(self, method, data, lbl, confs,
+                         random_state=None, verbose=0):
+        
+        if method is None: return data, True
 
-    def _fit_contrib_estimator(
-        self,
-        train_data, test_data,
-        inp, out, trial, 
-        model_name, model_params,
-        conf_ctrl,
-        metrics, 
-        inp_fea_list,
-        holdout_data,
-        compute_shap,
-        results_out_dir,
-        random_seed, verbose, 
-        results_kwargs):
+        for c in confs:
+            assert c in data.columns, f"'{c}' not in the dataset columns. \
+    Cannot control for confound variables that are not in the dataset."
+        
+        if "sample" in method:
+            
+            # first decide if we should do upsample or downsample or a mix of both
+            if "upsample" in method: oversample = True
+            elif "downsample" in method: oversample = False
+            else: oversample = None
+            sampler = CounterBalance(oversample=oversample, 
+                                     random_state=random_state, debug=verbose>2)
+            
+            # create the categories on which to data should be balanced
+            groups = np.zeros(len(data), dtype=int)
+            for i, c in enumerate(confs):                
+                c = data[c].astype('category')
+                groups += c.cat.codes*10**(i)
+                assert 1 < len(c.cat.categories) <= 10, f"confound variable '{c}' has \
+n={len(c.cat.categories)} unique value. Currently we support a max of 10 and min of 2 categories."
+            if verbose>0: 
+                print(f"Created n={len(np.unique(groups))} unique groups '{list(np.unique(groups))}' for counterbalancing.")
+            
+            try:
+                new_data, _ = sampler.fit_resample(data, y=data[lbl], groups=groups)
+            except Exception as e:
+                if 'has only 1 class or very few subjects in 1 of the classes' in str(e):
+                    print(e)
+                    print("[WARN] skipped confound control for this sample.")
+                    return data, False
+            
+        # elif method == "residualize":
+        #     return Residualize(cols).fit_transform(data)
+        else:
+            raise ValueError(f"conf_ctrl={method} is not a valid confound control method.\
+Currently supported methods are ['residualize','upsample', 'downsample', 'resample']")
+        
+        if verbose>0: print(f"[apply_conf_ctrl] Applied confound control method '{method}' for confound variables {confs}. \
+Data changed size from {data.shape} to {new_data.shape}.")
+        
+        return new_data, True
+    
+
+    def _fit_contrib_estimator(self,
+                            train_data, test_data,
+                            inp, out, trial, 
+                            model_name, model_params,
+                            metrics, 
+                            inp_fea_list,
+                            holdout_data,
+                            compute_shap,
+                            results_out_dir,
+                            random_seed, verbose, 
+                            results_kwargs):
         ''' run one baseline linear model for the given 
         [label, features] with 'trial' number of cross-validation folds''' 
         
         start_time = datetime.now()
+
         if verbose>1: 
             inp_fea_list_print = inp_fea_list
             if len(inp_fea_list) > 10:
                 inp_fea_list_print = inp_fea_list[:3] + ["..."] + inp_fea_list[-3:]
-            print(f'Input Features :(name={inp}, n={len(inp_fea_list)}) {inp_fea_list_print}')
-            print(f'Output label   : {out}')
-            print(f'confound control   : {conf_ctrl}')
+            print(f'Model           : {model_name}({model_params})')
+            print(f'Input Features  :(name={inp}, n={len(inp_fea_list)}) {inp_fea_list_print}')
+            print(f'Output label    : {out}')
+            print(f'Confound control: {results_kwargs["type"]}')
 
         # run logistic regression and linear regression for tabular dataset # TODO support SVM too
         compute_shap = (compute_shap) and (model_name.upper() in ['LR'] and inp in ["attr_all"]) 
-        results_dict, model_config = self._fit_model(train_data, test_data,
-                                                    X_cols=inp_fea_list, y_col=out,
-                                                    model_name=model_name, model_params=model_params,
-                                                    conf_ctrl=conf_ctrl,
-                                                    holdout_data=holdout_data,
-                                                    compute_shap=compute_shap,
-                                                    metrics=metrics,
-                                                    random_seed=random_seed)
+        results_dict, model_config = fitmodel(
+                                            train_data, test_data,
+                                            X_cols=inp_fea_list, y_col=out,
+                                            model_name=model_name, model_params=model_params,
+                                            holdout_data=holdout_data,
+                                            compute_shap=compute_shap,
+                                            metrics=metrics,
+                                            random_seed=random_seed)
 
         if compute_shap:
             # extract the SHAP scores and store as individual columns
@@ -903,228 +941,13 @@ self.load_generated_dataset()"
         
         # save the results as a csv file
         pd.DataFrame([result]).to_csv(
-            f"{results_out_dir}/run-temp_out-{out}_inp-{inp}_{model_config['model']}_{trial}.csv", 
+            f"{results_out_dir}/run-temp_out-{out}_inp-{inp}_{model_config['model']}_{results_kwargs['type']}_{trial}.csv", 
                   index=False)
-    
 
-    
-    def _fit_model(self, 
-                  df_train, df_test,
-                  X_cols, y_col,
-                  model_name='LR', model_params={},
-                  conf_ctrl=None,
-                  holdout_data=None,
-                  compute_shap=False, 
-                  random_seed=None,
-                  metrics=["r2"]):
-        '''Fit a model to the given dataset and estimate the model performance using cross-validation.
-        Also, estimate the SHAP scores if compute_shap is set to True.
-        '''
-        results = {}
         
-        # split the data into input features and output labels
-        train_X, train_y = df_train[X_cols], df_train[y_col]
-        test_X, test_y = df_test[X_cols], df_test[y_col]
-        
-        # when X= attr_* filter continuous vs categorical columns and scale only the categorical
-        if len(X_cols)<100:
-            input_attrs = True
-            cat_col_names_selector = selector(dtype_include=object)
-            cont_col_names_selector = selector(dtype_exclude=object)
-            
-            cont_col_names = cont_col_names_selector(train_X)
-            cat_col_names = cat_col_names_selector(train_X)
-
-            categorical_preprocessor = OneHotEncoder(handle_unknown='ignore')
-            continuous_preprocessor = StandardScaler()
-            preprocessor = ColumnTransformer([
-                            ("one-hot-encoder", categorical_preprocessor, cat_col_names),
-                            ("minmax_scaler", continuous_preprocessor, cont_col_names),
-                            ])
-            
-        else:
-            input_attrs = False
-            preprocessor = make_pipeline(
-                            VarianceThreshold(), 
-                            StandardScaler())
-            
-        
-        # append the confound control operation to the sklearn pipeline
-        if conf_ctrl is not None: #TODO 
-            preprocessor = make_pipeline(preprocessor, conf_ctrl)
-        
-        # set the model and its hyperparameters
-        n_classes = train_y.nunique()
-        regression_task = (n_classes > 5)
-        if model_name.upper() == 'LR':
-            if regression_task: # TODO test
-                if 'l1_ratio' not in model_params: model_params.update(dict(l1_ratio=0))
-                if 'alpha' not in model_params: model_params.update(dict(alpha=1.0))
-                model = ElasticNet(random_state=random_seed,
-                                   **model_params)
-            else:
-                # if no model_params are explicitly provided then default to rbf kernel 
-                if 'penalty' not in model_params: model_params.update(dict(penalty='l2'))
-                if 'C' not in model_params: model_params.update(dict(C=1.0))
-                if 'solver' not in model_params: model_params.update(dict(solver='lbfgs'))
-                # multiclass classification
-                if n_classes > 2: model_params.update(dict(multi_class='multinomial'))
-
-                model = LogisticRegression(max_iter=2000, random_state=random_seed,
-                                                **model_params) 
-        elif model_name.upper() == 'SVM':
-            # if no model_params are explicitly provided then default to rbf kernel 
-            if 'kernel' not in model_params: model_params.update(dict(kernel='rbf'))
-            if model_params['kernel'] == 'linear':
-                model_params.update(dict(penalty='l2', loss='squared_hinge', C=1.0))
-                # add predict_proba function as LinearSVC does not have it
-                def _predict_proba(self, X):
-                    logits = self.decision_function(X)
-                    probas = 1 / (1 + np.exp(-logits))
-                    return np.array([1 - probas, probas]).T
-            else:
-                if 'gamma' not in model_params: model_params.update(dict(gamma='scale'))
-
-            if regression_task: # TODO test
-                if model_params['kernel']=='linear':
-                    model_params_lin = model_params.copy()
-                    model_params_lin.pop('kernel', None)
-                    model = LinearSVR(random_state=random_seed, dual='auto', **model_params_lin)
-                    model.predict_proba = lambda X: _predict_proba(model, X)
-                else:
-                    model = SVR(random_state=random_seed, probability=True,
-                            **model_params)
-                model = SVR(random_state=random_seed, probability=True,
-                            **model_params)
-            else:
-                if model_params['kernel']=='linear':
-                    model_params_lin = model_params.copy()
-                    model_params_lin.pop('kernel', None)
-                    model = LinearSVC(random_state=random_seed, dual='auto', **model_params_lin)
-                    model.predict_proba = lambda X: _predict_proba(model, X)
-                else:
-                    model = SVC(random_state=random_seed, probability=True,
-                            **model_params)
-                
-        elif model_name.upper() == 'RF':
-            if regression_task:
-                if 'n_estimators' not in model_params: model_params.update(dict(n_estimators=200))
-                if 'max_depth' not in model_params: model_params.update(dict(max_depth=5))
-                model = RandomForestRegressor(random_state=random_seed,
-                                            **model_params)
-            else:
-                model = RandomForestClassifier(random_state=random_seed,
-                                            **model_params)
-                
-        elif model_name.upper() == 'MLP':                
-            if 'hidden_layer_sizes' not in model_params:
-                if input_attrs:
-                    model_params.update(dict(hidden_layer_sizes=(200,100,20)))
-                else:
-                    model_params.update(dict(hidden_layer_sizes=(5000,100,20)))
-
-            if 'max_iter' not in model_params: model_params.update(dict(max_iter=1000))
-            if regression_task:
-                model = MLPRegressor(random_state=random_seed, early_stopping=True,
-                                    **model_params)
-            else:
-                model = MLPClassifier(random_state=random_seed, early_stopping=True,
-                                    **model_params)
-        else:
-            ## TODO support sklearn.linear_model.RidgeClassifier, tree.DecisionTreeClassifier, svm.SVC, sklearn.svm.LinearSVC, 
-            raise ValueError(f"model_name '{model_name}' is invalid.\
-Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
-        
-        # Train and fit the model
-        clf = make_pipeline(preprocessor, model)
-        # print("[D] clf = ", clf)
-        clf.fit(train_X, train_y)
-        
-        # estimate all requested metrics using the best model
-        for metric_name in metrics:
-            # if classification then use d2_metric_probas instead of r2
-            if metric_name.lower() == "r2" and n_classes <= 5: 
-                metric_fn = make_scorer(d2_metric_probas, needs_proba=True)
-            else:
-                metric_fn = get_scorer(metric_name)
-            
-            results.update({f"score_train_{metric_name}": metric_fn(clf, train_X, train_y),
-                            f"score_test_{metric_name}": metric_fn(clf, test_X, test_y)})
-            
-            # if an additional holdout dataset is provided then also estimate the score on it
-            if holdout_data is not None and len(holdout_data)>0:
-                for holdout_name, holdout_data_i in holdout_data.items():
-                    results.update({f"score_test_{holdout_name}_{metric_name}": 
-                                    metric_fn(clf, holdout_data_i[X_cols], holdout_data_i[y_col])})
-
-        # SHAP explanations
-        shap_contrib_scores = None
-        if compute_shap:
-            preprocessing, best_model = clf[:-1], clf[-1]
-            # print("[D] best model = ", best_model)
-            data_train_processed = preprocessing.transform(train_X)
-            data_test_processed = preprocessing.transform(test_X)
-            all_data_processed = np.concatenate((data_train_processed,
-                                                data_test_processed), axis=0)
-            # transform the existing feature_names to include the one-hot encoded features
-            feature_names = train_X.columns.tolist()
-            new_feature_names = preprocessing.get_feature_names_out(feature_names)
-            n_feas = len(new_feature_names)
-            # remove preprocessor names from feature names
-            new_feature_names = [name.split("__")[-1] for name in new_feature_names]
-            explainer = shap.Explainer(best_model, 
-                                    data_train_processed,
-                                    feature_names=new_feature_names)
-            shap_values = explainer(all_data_processed)
-            base_shap_values = shap_values.base_values 
-            # get the model predicted probabilities to calculate C = probas - base for each sample
-            model_probas = best_model.predict_proba(all_data_processed) 
-            #  I verified that the shap values correspond to the second proba dim and not the first
-            model_probas = model_probas[:,1].squeeze()      
-            # calculate C = probas - base for each sample
-            logodds_adjusted = logit(model_probas) - base_shap_values
-            # now we expect the sum(shap_values) to be equal to logodds_adjusted for each sample
-            assert np.allclose(shap_values.values.sum(axis=1), logodds_adjusted), \
-                "sum(shap_values) != logodds_adjusted for some samples"
-            # scale shap values to positive values [0,inf] for each sample X
-            shap_val_mins = shap_values.values.min(axis=1)
-            shap_values_pos = (shap_values.values - shap_val_mins[:,np.newaxis])
-            # also apply these transforms to the RHS (logodds_centered) n_feas times
-            logodds_adjusted = (logodds_adjusted - n_feas*shap_val_mins)
-            # calculate shap value based contrib score for each feature
-            contribs = shap_values_pos / logodds_adjusted[:,np.newaxis]
-            
-            contribs_avg = contribs.mean(axis=0) 
-
-    #         fi = 37
-    #         print('[D] f={} sum(contrib[f])[:5] = {} \t sum(contrib_avg)={}\
-    #  \ncontribs[:5,f]     \t= {} \
-    #  \nShap_scaled[:5,f]  \t= {} \
-    #  \nlogodds_adjusted[:5] \t= {}'.format(new_feature_names[fi], contribs[:5].sum(axis=1), contribs_avg.sum(),
-    #             contribs[:5,fi], shap_values_pos[:5,fi],
-    #             logodds_adjusted[:5]))
-    #         print("[D]", contribs.mean(), contribs_avg)
-            # calculate mean of absolute shaps for each feature
-            # contribs = np.abs(shap_values.values)
-            # shap_contrib_scores = np.abs(best_model.coef_).squeeze().tolist() # model coefficients
-            #min max scale the avg contribs to [0,1]
-            contribs_avg = (contribs_avg - contribs_avg.min())/(contribs_avg.max() - contribs_avg.min())
-            # contribs_avg = contribs_avg - contribs_avg.min()
-            #scale it to sum to 1
-            contribs_avg = contribs_avg / contribs_avg.sum()
-
-            shap_contrib_scores = [(fea_name, contribs_avg[i]) \
-                                for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
-            results.update({"shap_contrib_scores": shap_contrib_scores})
-
-        settings = {"model":model_name, "model_params":model_params,  "model_config":model}
-        return results, settings
-        
-    
     def _split_dataset(self, 
                        df_data, stratify_by, 
-                       df_test_data=None,
-                       CV=1, random_seed=42, verbose=False):
+                       CV=1, random_seed=42):
         """Split the dataset into training, validation, and test sets."""
         #TODO change label to categorical if required
         # df['label'] = pd.factorize(df[label])[0]
@@ -1153,11 +976,10 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
         return slugify("_".join([f"{k}-{v}" for k,v in model_params.items()]))
 
 
-    def _get_feature_cols(self,
-                          feature_types, lbl=''):
+    def _get_feature_cols(self, feature_types, lbl=''):
         
         all_attr_cols = [n for n,_ in self.GENVARS.items()]
-        all_cov_cols  = [n for n,_ in self.COVARS.items()]
+        all_cov_cols  = [n for n,_ in self.COVARS.items() if lbl!=n]
                 
         # create a list all cov to image attribute relations in the CGM
         attr_subsets = []
@@ -1178,28 +1000,27 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
         features_dict = {}
         for f_type in feature_types:
             if f_type == "attr_subsets":
-                superset = []
+                # superset = []
                 for subset in attr_subsets:
                     subset_name = ", ".join(subset)
                     features_dict.update({f"attr_{subset_name}": subset})
 
-                    superset.extend(subset)
+                    # superset.extend(subset)
                     # also add each attribute individually
                     # if len(subset)>1:
                     #     for attr in subset:
                     #         features_dict.update({attr_{attr}: [attr]})
                 # finally add the superset of all attributes subsets as one feature
-                superset = list(set(superset))
-                if superset not in cov_subsets:
-                    features_dict.update({"attr_superset": superset})
-                features_dict.update({"attr_superset": list(set(superset))})
+                # superset = list(set(superset))
+                # if superset not in cov_subsets:
+                #     features_dict.update({"attr_superset": superset})
+                # features_dict.update({"attr_superset": list(set(superset))})
 
             elif f_type == "attr_superset":
                 superset = sorted(list(set([s for subset in attr_subsets for s in subset])))
                 features_dict.update({"attr_superset": superset})
         
             elif f_type == "cov_subsets":
-                cov_cols = [cov for cov in all_cov_cols if lbl!=cov]
                 superset = []
                 for subset in cov_subsets:
                     subset_name = ", ".join(subset)
@@ -1209,9 +1030,9 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
                     # if len(subset)>1:
                     #     for cov in subset:
                     #         features_dict.update({cov: [cov]})
-                superset = list(set(superset))
-                if superset not in cov_subsets:
-                    features_dict.update({"cov_superset": superset})
+                # superset = list(set(superset))
+                # if superset not in cov_subsets:
+                #     features_dict.update({"cov_superset": superset})
 
             elif f_type == "attr_all":
                 features_dict.update({"attr_all": all_attr_cols})
@@ -1224,6 +1045,11 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
 Valid input features for the contribution estimation modelling are \
 ['images', 'attr_all','attr_subsets','cov_all','cov_subsets']. \
 See doc string for more info on what each tag means.")
+        
+        # ensure that the provided lbl is not in the input feature set
+        for _, val in features_dict.items():
+            if lbl in val: val.remove(lbl)
+
         return features_dict
     
 
@@ -1232,7 +1058,7 @@ See doc string for more info on what each tag means.")
         dataset_dir = df_data['dataset_dir'].iloc[0]
         # dont load images if it is already loaded
         if (name not in self.IMAGES_ARR) or (len(df_data)!=len(self.IMAGES_ARR[name])):
-            if verbose>1: print(f"Loading {len(df_data)} images from disk loc '{dataset_dir}/images/*.jpg' ...")
+            if verbose>1: print(f"Loading {len(df_data)} images from disk '{dataset_dir}/images/*.jpg' ...")
             
             img_files = [f"{dataset_dir}/images/{subID:05}.jpg" for subID in df_data.index]
             with Parallel(n_jobs=-1) as parallel:

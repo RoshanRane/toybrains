@@ -28,6 +28,7 @@ def print_tweaked_rules(RULES, tweak_rules, iters):
 
 def create_config_file(config_fname, covars, rules,
                        n_samples=1000, 
+                       dataset_suffix="",
                        show_probas=False, show_dag=False, 
                        return_baseline_results=False,
                        baseline_metrics=["r2"], trials=10,
@@ -50,6 +51,7 @@ RULES_COV_TO_GEN = {}\n'.format(pp.pformat(covars),
     # 4) Test that the config file meets the expectation using `ToyBrainsData(config=...).show_current_config()`
     toy = ToyBrainsData(config=config_fname)
     outdir_suffix = f"n_{os.path.basename(config_fname).replace('.py','')}"
+    if dataset_suffix!="": outdir_suffix += f"_{dataset_suffix}"
     toy.DATASET_DIR = f"{toy.OUT_DIR}_{outdir_suffix}"
     dataset_table_file = f"{toy.DATASET_DIR}/toybrains_{outdir_suffix}.csv"
     if os.path.exists(dataset_table_file) and not overwrite_existing:

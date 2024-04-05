@@ -16,14 +16,16 @@ from colordict import ColorDict, rgb_to_hex
 import shap
 
 
-def show_images(img_files, n_rows=1):
+def show_images(img_files, n_rows=1, n_cols=10, title=''):
     assert isinstance(img_files[0], (str,np.ndarray, np.generic)), "img_files \
 should either me a string path to the image files or numpy arrays"   
-    n_cols = 10
-    f, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols,n_rows), 
-                           sharex=True, sharey=True)
-    # f.suptitle("Toy brains dataset:")
+    
+    fig, axes = plt.subplots(n_rows, n_cols, 
+                                figsize=(n_cols,n_rows+0.5),  # +0.5 for title
+                                sharex=True, sharey=True)
     axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
+    
+    if title is not None and title != '': fig.suptitle(title, fontsize=12)
 
     for i, img in enumerate(img_files):
         if i<len(axes):
@@ -33,8 +35,9 @@ should either me a string path to the image files or numpy arrays"
             ax.imshow(img)
             ax.axis('off')
 
+    
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
 
 def plot_col_counts(df, title=''):
@@ -43,7 +46,7 @@ def plot_col_counts(df, title=''):
     cols = df_copy.columns 
     # convert each column to its appropriate dtype and 
     # then decide the type of plot to use for it
-    fs=12
+    fs=10
     plottypes = {}
     
     for col in cols:
@@ -72,10 +75,10 @@ def plot_col_counts(df, title=''):
     if subplot_overflows!=0: subplot_nrows+=1
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(3*subplot_ncols,2*subplot_nrows))
+                          figsize=(2*subplot_ncols,1+1*subplot_nrows))
     axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
     if title: f.suptitle(title, fontsize=fs+2)
-    f.supylabel("Count", fontsize=fs)
+    # f.supylabel("Count", fontsize=fs)
 
     for i, ax in enumerate(axes):
         # print('[D]',col, plottypes[col])
@@ -111,10 +114,10 @@ def plot_col_counts(df, title=''):
             ax.pie(cnt, labels=cnt.index,
                     colors=sns.color_palette('pastel'), autopct='%.0f%%')
             
-        ax.set_title(col, fontsize=fs-2)
+        ax.set_ylabel(col, fontsize=fs)
         ax.set_xlabel(None)
 
-    plt.tight_layout()
+    # plt.tight_layout()
     
     
 def plot_col_dists(df, attr_cols, cov_cols, title=''):
@@ -176,16 +179,25 @@ def show_contrib_table(dfs_results,
     average the results across trials after grouping by ['dataset','out', 'inp']'''
     if isinstance(dfs_results, (list, tuple)): dfs = pd.concat(dfs_results).copy()
     
-    # make the dataset name shorter for pretty-ness
+    # make the dataset name shorter for prettiness
     dfs = dfs.dropna(subset=["dataset"])
     dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x.rstrip('/')))
 
-    grp_by = ['out','inp','dataset']
+    grp_by = ['out','inp','type','dataset']
     if not avg_over_trials: grp_by.append('trial')
 
     if filter_rows:
         for col, vals in filter_rows.items():
-            dfs = dfs[dfs[col].isin(vals)]
+            include_nans = False
+            # if None is provided then select NaN values
+            for v in vals: 
+                if v is None: 
+                    include_nans = True
+                    vals.remove(v)
+            if include_nans:
+                dfs = dfs[dfs[col].isna() | dfs[col].isin(vals)]
+            else:
+                dfs = dfs[dfs[col].isin(vals)]
 
     if filter_cols:
         dfs = dfs[grp_by+filter_cols]
@@ -431,8 +443,8 @@ def viz_contrib_table(data, X_axes=['X->y','c->X','c->y'],
 
 def viz_contrib_table_2(df_original, 
                         metric_name='r2', 
-                        cmap=None, 
-                        title=''):
+                        ax=None, cmap=None, title='', 
+                        adjust_xticks=True):
     
     def get_yX_cX_cX(dataset_suffixes):
         cy, cX, yX = zip(*dataset_suffixes)
@@ -446,6 +458,7 @@ and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-
         return cy, cX, yX
     
     df = df_original.copy()
+    fs = 12
     assert df.index.name.lower() == 'dataset', f"index of the provided df should be 'dataset' but it is {df.index.name}"
     # shorten the 'dataset' name for the plot labels to only contain its suffix with cy, cX, yX
     df.index = df.index.map(lambda x: x.split('_')[-1])
@@ -455,53 +468,55 @@ and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-
     df = df.iloc[sort_order.argsort()]
 
     # plot with seaborn lineplot
-    sns.set_style("ticks")
-    f, ax = plt.subplots(figsize=(25, 8))
+
+    if ax is None: 
+        sns.set_style('ticks')
+        f, ax = plt.subplots(figsize=(25, 8))
+
     g = sns.lineplot(df, ax=ax, 
                      dashes=False, markers=True, alpha=0.9, linewidth=2,
                      palette=cmap)
 
     # make the plot pretty and readable
-    ax.set_ylabel(f"{metric_name.replace('-', ' ').replace('_',' ').title()} score", fontsize=15)
-    ax.set_xlabel(r'Increasing confound signal [$X \leftarrow c \to y$]'+'\n'+r'   &   True signal  [$X \leftarrow y$] ', fontsize=15)
-
+    ax.set_ylabel(f"{metric_name.replace('-', ' ').replace('_',' ').title()}", fontsize=fs)
+    ax.set_xlabel(r'Increasing confound signal [$X \leftarrow c \to y$]'+'\n'+r'   &   True signal  [$X \leftarrow y$] ', fontsize=fs)
     
     # on the x-axis ticks show the total X<-y and the total X<-c->y
-    last_Xy = -1
-    cy, cX, yX  = get_yX_cX_cX([xtick.get_text().split('-') for xtick in ax.get_xticklabels()])
-    poses = list(ax.get_xticks())
-    new_xticklabels = []
-    majorticks = []
-    for cy_i, cX_i, yX_i, pos_i in zip(cy, cX, yX, poses):
-        # add a major tick label every time the total_Xy changes
-        if cX_i == 0 and cy_i == 0:
-            majorticks.append(pos_i)
-            new_xtick = f'Xy={yX_i:03d}%      cy={cy_i:03d}%   cX={cX_i:03d}%'
-        else:
-            new_xtick = f'cy={cy_i:03d}%   cX={cX_i:03d}%'
-        new_xticklabels.append(new_xtick)
-    majorticks.append(poses[-1])
+    if adjust_xticks:
+        last_Xy = -1
+        cy, cX, yX  = get_yX_cX_cX([xtick.get_text().split('-') for xtick in ax.get_xticklabels()])
+        poses = list(ax.get_xticks())
+        new_xticklabels = []
+        majorticks = []
+        for cy_i, cX_i, yX_i, pos_i in zip(cy, cX, yX, poses):
+            # add a major tick label every time the total_Xy changes
+            if cX_i == 0 and cy_i == 0:
+                majorticks.append(pos_i)
+                new_xtick = f'Xy={yX_i:03d}%      cy={cy_i:03d}%   cX={cX_i:03d}%'
+            else:
+                new_xtick = f'cy={cy_i:03d}%   cX={cX_i:03d}%'
+            new_xticklabels.append(new_xtick)
+        majorticks.append(poses[-1]+2)
 
-    # print(ax.get_xticklabels(), new_xticklabels)       
-    ax.set_xticks(poses, new_xticklabels, rotation=90)
+        # print(ax.get_xticklabels(), new_xticklabels)       
+        ax.set_xticks(poses, new_xticklabels, rotation=90)
 
-    # vertical lines to show transition of X<-c->y
-    for x_line in majorticks:
-        ax.axvline(x_line-0.9, color='grey', ls='--', lw=1, alpha=0.5)
-        ax.vlines( x_line-0.9, 0, -0.45, color='grey', ls='--', lw=1,
-                clip_on=False,
-                transform=ax.get_xaxis_transform())
+        # vertical lines to show transition of X<-c->y
+        for x_line in majorticks:
+            ax.axvline(x_line-0.9, color='grey', ls='--', lw=1, alpha=0.5)
+            ax.vlines( x_line-0.9, 0, -0.45, color='grey', ls='--', lw=1,
+                    clip_on=False,
+                    transform=ax.get_xaxis_transform())
     
-    ax.set_xlim(-1, poses[-1]+1)
+        ax.set_xlim(-1, poses[-1]+1)
     
     ymin, ymax = ax.get_ylim()
-    ysteps = (ymax-ymin)/3
-    y_lines = [ymin+ysteps, ymin+2*ysteps, ymin+3*ysteps, ymax]
+    y_lines = [y_line for y_line in [0,25,75,100] if ymin<=y_line<=ymax]
     for y_line in y_lines:
         ax.axhline(y_line, color='grey', ls='--', lw=0.8, alpha=0.5)
 
     if title:
-        ax.set_title(title, fontsize=20)
+        ax.set_title(title, fontsize=fs+4)
 
-    sns.move_legend(ax, "upper right", bbox_to_anchor=(1.0, 1.1), frameon=True, ncol=3, title='')
-    plt.setp(g.get_legend().get_texts(), fontsize='20')  # for legend text
+    sns.move_legend(ax, "upper right", bbox_to_anchor=(1.0, 1.15), frameon=True, ncol=3, title='')
+    plt.setp(g.get_legend().get_texts(), fontsize=str(fs+4))  # for legend text
