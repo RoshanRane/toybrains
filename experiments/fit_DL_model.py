@@ -142,7 +142,7 @@ class LightningModel(L.LightningModule):
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         sch = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', 
-                                                         factor=0.1, patience=3)
+                                                         factor=0.75, patience=3)
         return {
             "optimizer": opt,
             "lr_scheduler": {
@@ -161,13 +161,14 @@ def fit_DL_model(dataset_path, label_col,
                 datasplit_df, trial='trial_0',
                 ID_col='subjectID', 
                 model_class=SimpleCNN,
+                learning_rate=0.05,
                 model_kwargs=dict(num_classes=2, final_act_size=65),
                 trainer_args=dict(max_epochs=50, accelerator='gpu',
                                     devices=[1]),
                 additional_loggers=[],
                 additional_callbacks = [],
                 batch_size=64, num_workers=8,
-                early_stop_patience=6,
+                early_stop_patience=8,
                 show_batch=False, random_seed=None, debug=False,
                 unique_name=''):
 
@@ -271,7 +272,7 @@ def fit_DL_model(dataset_path, label_col,
 
     # load model
     model = model_class(**model_kwargs)
-    lightning_model = LightningModel(model, learning_rate=0.05, 
+    lightning_model = LightningModel(model, learning_rate=learning_rate, 
                                      num_classes=model_kwargs['num_classes'])
 
     # configure TensorBoardLogger as the main logger 
@@ -341,7 +342,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='dataset/toybrains_n10000', type=str,
                         help='The relative pathway of the generated dataset in the toybrains repo')
-    parser.add_argument('-e', '--max_epochs', default=50, type=int)
+    parser.add_argument('-e', '--max_epochs', default=100, type=int)
     parser.add_argument('-b', '--batch_size', default=128, type=int)
     parser.add_argument('--gpus', nargs='+', default=None, type=int)
     parser.add_argument('--final_act_size', default=64, type=int)
@@ -425,6 +426,7 @@ Available colnames = {data.columns.tolist()}"
                                 datasplit_df=datasplit_df.reset_index(), trial=f'trial_{trial}',
                                 model_class=DL_MODEL, model_kwargs=model_kwargs,
                                 debug=args.debug, 
+                                learning_rate=0.03,
                                 additional_callbacks=[],
                                 additional_loggers=[],
                                 batch_size=args.batch_size, num_workers=num_workers,
