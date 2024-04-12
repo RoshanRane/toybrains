@@ -288,7 +288,8 @@ def fit_DL_model(dataset_path, label_col,
                     dataset_kwargs=train_dataset,
                     datasets_kwargs_test=test_datasets,
                     hook_layer=-1,
-                    debug=False)
+                    best_ckpt_by='loss_val', best_ckpt_metric_should_be='min',
+                    verbose=int(debug))
     
     callbacks = additional_callbacks + [drv]
     # add any other callbacks
@@ -325,6 +326,7 @@ def fit_DL_model(dataset_path, label_col,
     df_data = pd.read_csv(raw_csv_path)
     drv_backend = DeepRepVizBackend(
                   conf_table=df_data,
+                  best_ckpt_by='loss_val',
                   ID_col=ID_col, label_col=label_col)
     log_dir = trainer.log_dir + '/deeprepvizlog/'
     drv_backend.load_log(log_dir)
@@ -367,7 +369,8 @@ Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     if args.debug:
         os.system('rm -rf log/*debugmode*')
         unique_name = 'debugmode'+unique_name
-        args.max_epochs = 2
+
+        args.max_epochs = 2 if args.max_epochs>=100 else args.max_epochs
         args.batch_size = 5
         args.k_fold = 2 if args.k_fold>2 else args.k_fold
         num_workers = 5

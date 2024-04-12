@@ -19,7 +19,6 @@ if DEEPREPVIZ_BACKEND not in sys.path:
 from DeepRepVizBackend import DeepRepVizBackend
 
 DEBUG = False
-N_JOBS = -1 if not DEBUG else 1
 CREATE_V1_TABLE = False
 ID_col = 'subjectID'
 label = 'lbl_lesion'
@@ -33,8 +32,12 @@ if __name__ == "__main__":
     # get the list of datasets present in the current directory's log folder that have DeepRepViz logs
     # also, check if the model training for all log folders have completed (TODO check for checkpoint json file rather than the DeepRepViz-v1-*.csv file
     DATASET_UNIQUE_IDS = sorted([os.path.basename(logdir).split('_')[3] for logdir in glob(LOGDIR_SEARCH_PATH.split('/trial')[0].format(N_SAMPLES, '')) \
-    if len(glob(f"{logdir}/*/deeprepvizlog/DeepRepViz-v1-*.csv"))==len(glob(f"{logdir}/*/deeprepvizlog"))]) 
+    if (len(glob(f"{logdir}/*/deeprepvizlog/DeepRepViz-v1-*.csv"))==len(glob(f"{logdir}/*/deeprepvizlog")))]) 
+    
+    N_JOBS = len(DATASET_UNIQUE_IDS) if len(DATASET_UNIQUE_IDS)<10 else 10
+
     if DEBUG: 
+        N_JOBS = 1
         DATASET_UNIQUE_IDS = DATASET_UNIQUE_IDS[:2]
         print(f"runnning in DEBUG mode .. \nselecting only {len(DATASET_UNIQUE_IDS)} datasets ..")
 
