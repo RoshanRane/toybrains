@@ -169,6 +169,7 @@ def fit_DL_model(dataset_path, label_col,
                 additional_callbacks = [],
                 batch_size=64, num_workers=8,
                 early_stop_patience=8,
+                gen_v1_table=False,
                 show_batch=False, random_seed=None, debug=False,
                 unique_name=''):
 
@@ -322,15 +323,19 @@ def fit_DL_model(dataset_path, label_col,
 # ['test_BAC']*100,  test_scores['test_D2']*100))
     
     # create and save the DeepRepViz v1 table 
-    raw_csv_path = glob(f'{dataset_path}/*{dataset_name}.csv')[0]
-    df_data = pd.read_csv(raw_csv_path)
-    drv_backend = DeepRepVizBackend(
-                  conf_table=df_data,
-                  best_ckpt_by='loss_val',
-                  ID_col=ID_col, label_col=label_col)
-    log_dir = trainer.log_dir + '/deeprepvizlog/'
-    drv_backend.load_log(log_dir)
-    drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
+    if gen_v1_table:
+        raw_csv_path = glob(f'{dataset_path}/*{dataset_name}.csv')[0]
+        
+        df_data = pd.read_csv(raw_csv_path)
+        drv_backend = DeepRepVizBackend(
+                    conf_table=df_data,
+                    best_ckpt_by='loss_val',
+                    ID_col=ID_col, label_col=label_col)
+        
+        log_dir = trainer.log_dir + '/deeprepvizlog/'
+        drv_backend.load_log(log_dir)
+
+        drv_backend.convert_log_to_v1_table(log_key=log_dir, unique_name=unique_name)
     
     return trainer, logger
 
