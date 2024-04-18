@@ -7,12 +7,12 @@ echo "global settings: ${DEBUG} N_FOLD=${N_FOLD} N_SAMPLES=${N_SAMPLES}"
 # repeat for all 5 iterations of the dataset
 
 gpu=0
-for yX in '000' '075'; #{0,2,4}
+for yX in '025' '050'; 
     do
-    for cX in '000' '075'; 
+    for cX in '000' '025' '050' '075'; 
         do
         cy=$cX
-        for ACT_SIZE in '003' '032' '256';
+        for ACT_SIZE in '003' '064' '256';
             do
             echo "Dataset with     cy = ${cy}    cX = ${cX}     yX = ${yX}      &  ACT_SIZE = ${ACT_SIZE}        on gpu ${gpu}"    
             # run the model
@@ -24,6 +24,6 @@ for yX in '000' '075'; #{0,2,4}
             done
         sleep 5
         done
-    sleep 5
+    sleep 15 # wait for 15 seconds to start the next yX
     done
     

@@ -28,6 +28,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
+import re
 import logging
 # disable some unneccesary lightning warnings
 logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
@@ -160,6 +161,7 @@ class LightningModel(L.LightningModule):
 def fit_DL_model(dataset_path, label_col, 
                 datasplit_df, trial='trial_0',
                 ID_col='subjectID', 
+                additional_drv_test_data={},
                 model_class=SimpleCNN,
                 learning_rate=0.05,
                 model_kwargs=dict(num_classes=2, final_act_size=65),
@@ -186,14 +188,12 @@ def fit_DL_model(dataset_path, label_col,
     dataset_name = os.path.basename(dataset_path)
 
     # split the dataset as defined in the datasplit_df
-    if datasplit_df.index.name==ID_col:
-        datasplit_df = datasplit_df.reset_index()
+    if datasplit_df.index.name==ID_col: datasplit_df = datasplit_df.reset_index()
+    # Select a specific trial given by 'trial' out of the k-folds  
     split_col = "datasplit"
-    # select the correct trial
     datasplit_df = datasplit_df.rename(columns={trial:split_col})
     datasplit_df = datasplit_df[[ID_col, label_col, split_col]]
     
-    # datasplit_df = datasplit_df.rename(columns={label_col:'label'}) #TODO remove this hardcoded requirement of label_col name from get_toybrain_dataloader()
     df_train = datasplit_df[datasplit_df[split_col]=='train']    
     df_val = datasplit_df[datasplit_df[split_col]=='val']
     df_test = datasplit_df[datasplit_df[split_col]=='test']
@@ -226,24 +226,11 @@ def fit_DL_model(dataset_path, label_col,
                     num_workers=num_workers, 
                     )
     
-    df_test = datasplit_df[datasplit_df[split_col]=='test']
-    test_dataset = ToyBrainsDataloader(
-        img_names = df_test[ID_col].values, 
-        labels = df_test[label_col].values,
-        img_dir = dataset_path+'/images',
-        transform = transforms.Compose([transforms.ToTensor()])
-        )
-    test_loader = DataLoader(
-                    dataset=test_dataset,
-                    shuffle=False, batch_size=batch_size, drop_last=True,
-                    num_workers=num_workers, 
-                    )
-    
     if show_batch:
         viz_batch(val_loader, title="Validation data")
     
-    # create dataloaders for DeepRepViz no shuffle
-    train_dataset = {
+    # create dataloaders for DeepRepViz() with no shuffle
+    drv_train_dataset = {
             'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
                                     img_names=df_train[ID_col].values,
                                     labels=df_train[LABEL_COL].values,
@@ -251,7 +238,7 @@ def fit_DL_model(dataset_path, label_col,
             "expected_IDs":df_train[ID_col].values, 
             "expected_labels":df_train[LABEL_COL].values, 
         }
-    test_datasets = {
+    drv_test_datasets = {
         'val': {
             'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
                                     img_names=df_val[ID_col].values,
@@ -267,9 +254,22 @@ def fit_DL_model(dataset_path, label_col,
                                     transform=transforms.ToTensor()),
             "expected_IDs":df_test[ID_col].values,
             "expected_labels":df_test[LABEL_COL].values
-                },
-        # 'test2': {....} # can provide a list of test datasets #TODO test
-    }                     
+                }
+        }            
+    # append any additional test datasets provided too
+    for testdata_name, testdata_path in additional_drv_test_data.items():
+        testdata_csv = glob(testdata_path + '/toybrains*.csv')
+        assert len(testdata_csv)==1, f"Toybrains Test dataset found = {testdata_csv} in the path {testdata_path} .."
+        testdata_df = pd.read_csv(testdata_csv[0])
+        
+        drv_test_datasets[testdata_name] = {
+            'dataloader_kwargs': dict(img_dir=testdata_path+'/images',
+                                    img_names=testdata_df[ID_col].values,
+                                    labels=testdata_df[LABEL_COL].values,
+                                    transform=transforms.ToTensor()),
+            "expected_IDs":testdata_df[ID_col].values,
+            "expected_labels":testdata_df[LABEL_COL].values}
+
 
     # load model
     model = model_class(**model_kwargs)
@@ -286,8 +286,8 @@ def fit_DL_model(dataset_path, label_col,
     
     ## Init DeepRepViz callback            
     drv = DeepRepViz(dataloader_class=ToyBrainsDataloader, 
-                    dataset_kwargs=train_dataset,
-                    datasets_kwargs_test=test_datasets,
+                    dataset_kwargs=drv_train_dataset,
+                    datasets_kwargs_test=drv_test_datasets,
                     hook_layer=-1,
                     best_ckpt_by='loss_val', best_ckpt_metric_should_be='min',
                     verbose=int(debug))
@@ -349,6 +349,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='dataset/toybrains_n10000', type=str,
                         help='The relative pathway of the generated dataset in the toybrains repo')
+    parser.add_argument('-k', '--k_fold', default=1, type=int)
+    parser.add_argument( '--no_ood_val', action='store_true')
     parser.add_argument('-e', '--max_epochs', default=100, type=int)
     parser.add_argument('-b', '--batch_size', default=128, type=int)
     parser.add_argument('--gpus', nargs='+', default=None, type=int)
@@ -356,7 +358,6 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--unique_name', default='', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     parser.add_argument('-r', '--random_seed', default=None, type=int)
-    parser.add_argument('-k', '--k_fold', default=1, type=int)
     # parser.add_argument('-j','--n_jobs', default=20, type=int)
     args = parser.parse_args()
     
@@ -369,7 +370,8 @@ Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     DATA_CSV = DATA_CSV[0]
     ID_COL = 'subjectID'
     LABEL_COL = 'lbl_lesion'
-    
+    N_SAMPLES = int(DATA_DIR.split('_n')[-1].split('_')[0])
+
     unique_name = args.unique_name
     if args.debug:
         os.system('rm -rf log/*debugmode*')
@@ -379,35 +381,52 @@ Also ensure only one dataset exists for the given query '{DATA_DIR}'."
         args.batch_size = 5
         args.k_fold = 2 if args.k_fold>2 else args.k_fold
         num_workers = 5
+        args.no_ood_val = True
     else:
         num_workers = 8
 
     start_time = datetime.now()
 
+    ### collect the corresponding OOD test data 
+    OOD_test_datasets = {}
+    if not args.no_ood_val:
+        test_suffix = '_test'# Hardcoded
+        test_nsamples = 1000 # Hardcoded: n samples of toybrains test datasets are 1000
+        data_dir_test = re.sub(f'_n{N_SAMPLES}_', f'_n{test_nsamples}_', DATA_DIR) + test_suffix
+        data_dir_test_noconf = re.sub('cX...', 'cX000', re.sub('cy...','cy000', data_dir_test))
+        assert os.path.exists(data_dir_test_noconf), f"Could not find the equivalent 'no-conf' dataset {data_dir_test_noconf} for {DATA_DIR}"
+
+        data_dir_test_notrue = re.sub('yX...','yX000', data_dir_test) 
+        assert os.path.exists(data_dir_test_notrue), f"Could not find the equivalent 'no-true' dataset {data_dir_test_notrue} for {dataset}"
+        
+        OOD_test_datasets = {'test-no-conf': data_dir_test_noconf, 'test-no-true': data_dir_test_notrue}
+    
     # prepare the data splits as a dataframe mapping the subjectID to the split and trial
     data = pd.read_csv(DATA_CSV)
     assert ID_COL in data.columns, f"ID_COL={ID_COL} is not present in the dataset's csv file. \
 Available colnames = {data.columns.tolist()}"
     assert LABEL_COL in data.columns, f"LABEL_COL={LABEL_COL} is not present in the dataset's csv file. \
 Available colnames = {data.columns.tolist()}"
-    # drop all columns except subjectID, label, trial and datasplit
+
+    ### SPLITS: Create the n-fold splits for the data
+    # drop all columns except subjectID and label
     datasplit_df = data.drop(columns=[c for c in data.columns if c not in [ID_COL, LABEL_COL]])
     datasplit_df = datasplit_df.set_index(ID_COL)
-    # init as many trial columns as requested in args.k_fold
+    # create 'trial_x' columns: init as columns as args.k_fold
     for trial in range(args.k_fold):
         datasplit_df[f'trial_{trial}'] = 'unknown'
-    # first, set aside 20% of the data as test
+    # first, set aside 20% of the data as test and assign it commonly to all folds
     train_idxs, test_idxs = train_test_split(datasplit_df.index, test_size=0.2,
                                              random_state=args.random_seed)
     for trial in range(args.k_fold):
         datasplit_df.loc[test_idxs, f'trial_{trial}'] = 'test'
-    # initialize such that all data is used in the first trial
-    if args.k_fold <= 1:
+
+    if args.k_fold <= 1: # if 1 fold then initialize all data to the first trial
         train_idxs, val_idxs = train_test_split(train_idxs, test_size=0.1, 
                                                random_state=args.random_seed)
         datasplit_df.loc[train_idxs, 'trial_0'] = 'train'
         datasplit_df.loc[val_idxs, 'trial_0'] = 'val'
-    else:
+    else: # if k-fold then split the data into k times and assign each to a sep trial
         splitter = StratifiedKFold(n_splits=args.k_fold,
                                    shuffle=True,
                                    random_state=args.random_seed)
@@ -419,10 +438,11 @@ Available colnames = {data.columns.tolist()}"
     datasplit_df = datasplit_df.sort_index()
     (datasplit_df.filter(like='trial')!='unknown').all(), "some data points are not assigned to any split. {}".format(datasplit_df)
 
-    # configure the DL model
+    ### MODEL: configure the DL model
     DL_MODEL = SimpleCNN
     model_kwargs = dict(num_classes=1, final_act_size=args.final_act_size)
     
+    ### TRAIN: parallize the training across trials
     def _run_one_trial(trial):
         # use whatever is available (CPU/GPU) if args.gpu is None  
         accelerator= "gpu" if args.gpus is not None else "auto"
@@ -431,7 +451,8 @@ Available colnames = {data.columns.tolist()}"
         trainer, logger = fit_DL_model(
                                 DATA_DIR, 
                                 label_col=LABEL_COL, ID_col=ID_COL, 
-                                datasplit_df=datasplit_df.reset_index(), trial=f'trial_{trial}',
+                                trial=f'trial_{trial}', datasplit_df=datasplit_df, 
+                                additional_drv_test_data=OOD_test_datasets,
                                 model_class=DL_MODEL, model_kwargs=model_kwargs,
                                 debug=args.debug, 
                                 learning_rate=0.03,
