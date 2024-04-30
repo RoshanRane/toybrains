@@ -30,9 +30,8 @@ LOGDIR_SEARCH_PATH = "log/toybrains_n{}_*{}*/trial*/deeprepvizlog/"
 if __name__ == "__main__":
     
     # get the list of datasets present in the current directory's log folder that have DeepRepViz logs
-    # also, check if the model training for all log folders have completed (TODO check for checkpoint json file rather than the DeepRepViz-v1-*.csv file
-    DATASET_UNIQUE_IDS = sorted([os.path.basename(logdir).split('_')[3] for logdir in glob(LOGDIR_SEARCH_PATH.split('/trial')[0].format(N_SAMPLES, '')) \
-    if (len(glob(f"{logdir}/*/deeprepvizlog/DeepRepViz-v1-*.csv"))==len(glob(f"{logdir}/*/deeprepvizlog")))]) 
+    DATASET_UNIQUE_IDS = sorted([os.path.basename(logdir).split('_')[3] \
+for logdir in glob(LOGDIR_SEARCH_PATH.split('/trial')[0].format(N_SAMPLES, ''))]) 
     
     N_JOBS = len(DATASET_UNIQUE_IDS) if len(DATASET_UNIQUE_IDS)<10 else 10
 
@@ -73,8 +72,9 @@ if __name__ == "__main__":
             print(f"Found {len(logdirs)} logdirs for dataset with query ID '{dataset_unique_ID}'") 
             drv_backend._pprint_deeprepvizlogs()
 
-        # ### downsample the activations to 3D
-        drv_backend.downsample_activations(overwrite=False)
+        # ### downsample the activations to 3D using ICCon method
+
+        drv_backend.downsample_activations(overwrite=False, method='default')
 
         # ### Compute metrics
         # The backend can be asked to compute metrics for specific logdirs in the deeprepvizlogs
