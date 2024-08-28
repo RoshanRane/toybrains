@@ -1,8 +1,10 @@
 import os, shutil, sys
 from glob import glob
+import re
 import numpy as np
 import random
 import pandas as pd
+from scipy.special import expit, softmax
 import matplotlib
 from matplotlib import pyplot as plt
 plt.style.use("seaborn-v0_8-whitegrid") #'dark_background','seaborn-v0_8-muted', 'seaborn-v0_8-notebook',
@@ -11,29 +13,23 @@ import math
 from PIL import Image, ImageDraw
 from colordict import ColorDict
 from joblib import Parallel, delayed  
-from copy import copy, deepcopy
 from tqdm import tqdm
 import argparse
 import importlib
 from datetime import datetime
 from tabulate import tabulate
 from slugify import slugify
-
-from imblearn.over_sampling import RandomOverSampler
-from imblearn.under_sampling import RandomUnderSampler
-
+# from imblearn.over_sampling import RandomOverSampler
+# from imblearn.under_sampling import RandomUnderSampler
 import sklearn
-
 from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-
+# from sklearn.preprocessing import StandardScaler, OneHotEncoder
 import skimage.io as io
-
 # add custom imports
 from utils.fitmodel import fitmodel
 from utils.confounds import CounterBalance
+import utils.metrics
 # from utils.vizutils import plot_col_dists
-
 import graphviz
 # from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
 
@@ -42,27 +38,52 @@ import graphviz
 class PROB_VAR:
     '''Class to init a probabilistic variable that has states with a probability 
      distribution which can be modified and sampled from'''
-    def __init__(self, name, states):
+    def __init__(self, name, states, act=softmax):
+        # link function set to the logistic function by default
+        # for other options refer to https://www.statsmodels.org/stable/glm.html#link-functions
         self.name = name
         self.states = np.array(states)
         self.k = len(states)
+        self.act = self._make_act(act)
         self.reset_weights()
+        
+    def _make_act(self, act):
+        ''' The activation function that converts the weights into probabilities with some sanity checks and fixes'''
+        def act_fn(weights):
+            probas = act(weights)
+            # force very low probas and -inf to 0.0 and very high probas and inf to 1.0
+            probas[probas<1e-5] = 0.0 
+            probas[probas>1-1e-5] = 1.0
+            # if the error is larger than 0.1 then force the probability to sum to one with a warning
+            if abs(1.0 - probas.sum())>0.1: 
+                print(f"[WARN] The probabilities of the states of {self.name} do not sum to 1.0. \
+                The sum of the probabilities computed from weight {self.weights.tolist()} = {probas.sum()}.\
+                The probabilities are being forced to sum to 1.")
+                probas = probas/probas.sum()
+            else:  # adjust minor rounding errors 
+                probas = probas/probas.sum()
+
+            return probas
+        
+        return act_fn
         
     def set_weights(self, weights):
         # if weights are directly provided then just set them
         assert len(weights)==self.k, f"provided len(weights={weights}) are not equal to configured len(states={self.states})."
         self.weights = np.array(weights)
+        
 
     def bump_up_weight(self, idxs=None, amt=1):
-        '''bump up the exisitng weight at 'idx' by 'amt' '''
+        '''bump up the existing weight at 'idx' by 'amt' '''
         # if no idx given then it implies all idxs
         if idxs is None: 
             idxs = np.arange(self.k)
         elif isinstance(idxs, (int,float)): # and not a list
             idxs = [idxs]
-            
         if isinstance(amt, (int,float)):
             amt = [amt]*len(idxs)
+        assert len(amt)==self.k, f"len(amt={amt}) are not equal to len(states={self.states})"
+
         for i,idx in enumerate(idxs):
             try:
                 self.weights[idx] += amt[i]
@@ -71,19 +92,22 @@ class PROB_VAR:
 with n={self.k} states {self.states} and weights {self.weights}")
                 raise e
         # self._smooth_weights()
-        assert len(self.weights)==self.k, f"len(weights={self.weights}) are not equal to len(states={self.states}).\
-Something failed when performing self._smooth_weights()"
         
         return self
         
     def sample(self):
         # if weights are not set at all then set them to be uniform before computing the probas
-        if self.weights.sum()==0: self.weights = np.ones(self.k)
-        probas = self.weights/self.weights.sum()
-        return np.random.choice(self.states, p=probas).item()
+        if self.weights.sum()==0: 
+            probas=None # sample from a uniform distribution
+        else:
+            probas = self.act(self.weights)
+        sample = np.random.choice(self.states, p=probas).item()
+        self.last_sample = sample
+        return sample
     
     def reset_weights(self):
         self.weights = np.zeros(self.k)
+        self.last_sample = None
         
 #     def _smooth_weights(self): 
 #         """Smooths the self.weights numpy array by taking the 
@@ -108,22 +132,26 @@ Something failed when performing self._smooth_weights()"
 #         # windows  = windows[pad[0]-1:-pad[1]]
 #         return self
 
-##################################               Main Class             #################################################
-########################################################################################################################
+
+#######################################################################################################################
+##################################               Main Class             ###############################################
+#######################################################################################################################
+
 class ToyBrainsData:
     
     def __init__(self,  
                  config=None, 
-                 out_dir="dataset/toybrains", 
+                 out_dir="dataset/", 
                  img_size=64, seed=None, 
-                 debug=False):
+                 verbose=0,
+                 save_probas=False):
         
         self.I = img_size
         self.OUT_DIR = out_dir
-        self.debug = False if (debug == 'False' or debug == False) else True
-            
+        self.verbose = verbose
+        self.save_probas = save_probas
         # forcefully set a random seed
-        if self.debug: seed = 42
+        if self.verbose>2: seed = 42
         
         if seed is not None:
             np.random.seed(seed)
@@ -140,7 +168,7 @@ class ToyBrainsData:
         else:
             self.COVARS = {}
             self.RULES_COV_TO_GEN = {}
-            print("[WARN] No config file provided.")
+            if self.verbose>0: print("[WARN] No config file provided when instantiating a ToyBrainsData() object.")
             
         self._init_df()
         # store a dict of results tables (run.csv) on the dataset
@@ -150,10 +178,14 @@ class ToyBrainsData:
                        }
         self.IMAGES_ARR = {}
 
+        # check the metrics defined in utils/metrics.py
+        self.my_custom_scorers = [func for func in dir(utils.metrics) if '_'!=func[0]] 
+
     ### INIT METHODS
     def _init_df(self):
         # Initialize a table to store all dataset attributes
-        columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))                
+        columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))
+        if self.save_probas: columns += [f'probas_{var}' for var in columns]                
         self.df =  pd.DataFrame(columns=columns)
         self.df.index.name = "subjectID"  
     
@@ -172,17 +204,18 @@ class ToyBrainsData:
         assert hasattr(config, 'RULES_COV_TO_GEN')
         # sanity checks
         for cov, rules in config.RULES_COV_TO_GEN.items():
-            assert cov in self.COVARS.keys(), f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the covariate {cov} has not been previously defined in COVARS"
-            for cov_state, updates in rules.items():
-                if not isinstance(cov_state, tuple):
-                    assert cov_state in self.COVARS[cov].states, f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the {cov}={cov_state} has not been previously defined in COVARS"
-                else: # continuous states
-                    for cov_state_i in cov_state:
-                        assert cov_state_i in self.COVARS[cov].states, f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the {cov}={cov_state_i} has not been previously defined in COVARS"
-                        
+            assert cov in self.COVARS.keys() or cov in self.GENVARS.keys(), f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the covariate {cov} has not been previously defined in COVARS\
+and it is not a generative attribute either."
+            if cov in self.COVARS.keys(): # only check for covars and not for genvars
+                for cov_state, updates in rules.items():
+                    if not isinstance(cov_state, tuple):
+                        assert cov_state in self.COVARS[cov].states, f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the {cov}={cov_state} has not been previously defined in COVARS"
+                    else: # continuous states
+                        for cov_state_i in cov_state:
+                            assert cov_state_i in self.COVARS[cov].states, f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the {cov}={cov_state_i} has not been previously defined in COVARS"
                 
         self.RULES_COV_TO_GEN = config.RULES_COV_TO_GEN
-        
+
         # compute the nodes and edges of the configuration for forming a Causal Graphical Model
         nodes, edges = set(), set()
         for c, c_states in self.RULES_COV_TO_GEN.items():
@@ -203,8 +236,9 @@ class ToyBrainsData:
 
     def _get_rule(self, cov_name, cov_state):
         '''Function handles situations in the config of RULES_COV_TO_GEN such as when
-         user provides a tuple of values as cov_state (continuous) instead of a single cov_state'''
-        rules = self.RULES_COV_TO_GEN[cov_name]
+         user provides a tuple of values as cov_state (continuous) instead of a single cov_state
+         Return None if no rule is defined for the covariate = cov_state'''
+        rules = self.RULES_COV_TO_GEN[cov_name] 
         if cov_state in rules.keys():
             return rules[cov_state]
         else:
@@ -212,33 +246,46 @@ class ToyBrainsData:
                 if isinstance(cov_rule, tuple):
                     if cov_state in cov_rule:
                         return rules[cov_rule]
-            else:
-                return None
+                    else:
+                        raise ValueError(f"[ERROR] The covariate {cov_name} has a state {cov_state} \
+that has no defined rules in the config file.")
             
     def _adjust_covar_dists_and_sample(self, fix_covar={}):
         # separate the covars into parent and child nodes of the causal links
         child_covs = set()
+        # generative attributes of the images can also be parents of some covars like the label y
+        # if they exist, they must be be sampled here already to sample the child nodes
+        parent_gens = set()
         for cov_name, cov_state in self.RULES_COV_TO_GEN.items():
+            if cov_name in self.GENVARS.keys():
+                parent_gens.add(cov_name)
             for cov_state, rules in cov_state.items():
                 for child_node, child_node_rule in rules.items():
                     if child_node in self.COVARS.keys():
                         child_covs.add(child_node)
+
         child_covs = list(child_covs)
-                
-        # first, sample the parent covars
+        parent_gens = list(parent_gens)
+        parent_gen_vars = {gen_name: self.GENVARS[gen_name] for gen_name in parent_gens}
+
+        # first, sample the parent covars and parent genvars
         covars = {}
-        for cov_name, covar in self.COVARS.items():
+        for cov_name, covar in list(self.COVARS.items()) + list(parent_gen_vars.items()):
             if cov_name not in child_covs:
-                if cov_name not in fix_covar:
-                    cov_state = covar.sample()
-                else:
+                if cov_name in fix_covar: # if predefined just use it (for viz purpose)
                     cov_state = fix_covar[cov_name]
+                else:
+                    cov_state = covar.sample()
                 covars.update({cov_name: cov_state})
                 # adjust the probability of the child covars if there is a rule
                 rules = self._get_rule(cov_name, cov_state)
-                for var, rule in rules.items():
-                    if var in child_covs:
-                        self.COVARS[var].bump_up_weight(**rule)
+                if rules is not None:
+                    # if fix_covar is provided (visualization reason) then only adjust the weights univariately w.r.t to only this covars 
+                    if len(fix_covar)==0 or (cov_name in fix_covar):
+                        for var, rule in rules.items():
+                            if var in child_covs:
+                                # print(f"[D][adjust_covar_dists_and_sample] {cov_name}(state={cov_state}) bumps weights of {var} with rule {rule['amt']}")
+                                self.COVARS[var].bump_up_weight(**rule)
                 
         # now, sample the child covars with the adjusted dists
         for cov_name, covar in self.COVARS.items():
@@ -247,19 +294,22 @@ class ToyBrainsData:
         
         return covars
         
-    def _adjust_genvar_dists(self, covars):
+    def _adjust_genvar_dists(self, covars): 
         """Configure the relationship between covariates and the generative attributes"""
         ### model `Covariates -> image attributes` distribution
-        for cov_name, cov_state in covars.items():
-            rules = self._get_rule(cov_name, cov_state)
-            if (cov_name not in self.RULES_COV_TO_GEN.keys()) or (rules is None):
-                # print unconfigured covs for debug
-                if self.debug: print(f"[WARN] No rules have been defined for covariate = {cov_name} with state = {cov_state}")
+        for cov_name, cov_state in covars.items(): 
+            try: 
+                rules = self._get_rule(cov_name, cov_state)
+            except Exception as e:
+                # print unconfigured covs for debugging
+                if self.verbose>0 and ('lbl' not in cov_name): 
+                    print(f"[WARN] No rules have been defined for covariate = {cov_name} with state = {cov_state}. skipping .. \n{e}")
                 continue
-            else:
+            if rules is not None:
                 for var, rule in rules.items():
-                    # ignore rules that are for cov->cov relation
+                    # ignore rules that are for cov->cov relation as they have already been handled in adjust_covar_dists_and_sample()
                     if var in self.GENVARS:
+                        # print("[D][adjust_genvar_dists()] bumping weights of ", var, "with rule", rule)
                         self.GENVARS[var].bump_up_weight(**rule)
               
     def update_tweaks(self, RULES_COV_TO_GEN_TWEAKED):
@@ -289,7 +339,7 @@ class ToyBrainsData:
     #     return CausalGraphicalModel(nodes=self.CGM_nodes, 
     #                                 edges=self.CGM_edges)
 
-    def show_current_config(self):
+    def show_current_config(self, subset=['all']):
         """
         show_attr_probas = True : shows how the sampling probability distribution of the different
                                   image attributes change for each covariate/label state. This feature
@@ -305,90 +355,99 @@ class ToyBrainsData:
         
         # show one plot for each src node to all it's destination node
         for cov_name, dst_nodes in sorted(src_to_dst_map.items()):
-            cov = self.COVARS[cov_name]
-            # hack: reducing time by only taking few states when there are more than 5 states
+            cov = self.COVARS[cov_name] if cov_name in self.COVARS else self.GENVARS[cov_name]
+            # hack: reduce plotting time by only taking few states when there are more than 10 states
             cov_states = cov.states if len(cov.states)<=10 else  cov.states[::len(cov.states)//10]
-            # interatively collect the weights dist. of each dst node for every possible state of the covariate
+            # for every possible state of the covariate, collect the final weights dist. of each dst node
             df_temps = []
             for cov_state in cov_states:
                 fix_covar = {cov_name : cov_state}
                 
                 df_temp = pd.DataFrame(index=range(1000)) 
                 for node_name in dst_nodes:
+                    # reset all other values to only observe the (univariate) relationship of src_node --> dst_node
                     self._reset_vars() 
+                    # print('[D] prob ({} ({}) --> {})'.format(cov_name, cov_state, node_name))
+                    # init_weights = self.GENVARS[node_name].weights if node_name in self.GENVARS else self.COVARS[node_name].weights
+                    # print('[D] init:', np.array(init_weights).round(2).tolist())
                     if node_name in self.GENVARS:
                         # only trigger the change in weights caused when covariate = cov_state
                         # do not set any other covariate state
-                        self._adjust_genvar_dists(fix_covar)
+                        self._adjust_genvar_dists(covars=fix_covar)
+                        # print('[D] update dst_node in genvar:', np.array(self.GENVARS[node_name].weights).round(2).tolist())
                         node = self.GENVARS[node_name]
                     elif node_name in self.COVARS:
-                        self._adjust_covar_dists_and_sample(fix_covar)
+                        self._adjust_covar_dists_and_sample(fix_covar=fix_covar)
+                        # print('[D] update dst_node in covar:', np.array(self.COVARS[node_name].weights).round(2).tolist())
                         node = self.COVARS[node_name]
                         
                     k = list(range(node.k))
                     df_temp.loc[k, node_name] = node.states
                     # normalize weights to get p-distribution 
-                    node_probas = (node.weights/node.weights.sum())*100 
+                    node_probas = node.act(node.weights)*100 
+                    # print('[D] final:', np.array(node_probas).astype(int).tolist())
                     df_temp.loc[k, f"{node_name}_probas"] = node_probas
                     
                 # add the cov state to the whole df                     
                 df_temp = df_temp.dropna(how='all')
                 df_temp[cov_name] = cov_state
-                if cov_states[0] in [True, False]:
-                    df_temp[cov_name] = df_temp[cov_name].astype(bool)
+                # if cov_states[0] in [True, False]:
+                #     df_temp[cov_name] = df_temp[cov_name].astype(bool)
                 df_temps.append(df_temp)
             df = pd.concat(df_temps, ignore_index=True)
             # display(df)
 
-            # create figure
-            sns.set(style="ticks")
-            sns.set_style("whitegrid")
-            fs = 12
-            f,axes = plt.subplots(1, len(dst_nodes), 
-                                    figsize=(2+2*len(dst_nodes), 3),
-                                    sharex=False, sharey=True)
-            f.suptitle(r"{}    $\longmapsto$   ".format(cov_name), fontsize=fs+2)
-            axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
-        
-            for i, (ax, node) in enumerate(zip(axes, dst_nodes)):
-                legend = (i==(len(axes)-1))
-                g = sns.lineplot(df, hue=cov_name, 
-                                    x=node, y=f"{node}_probas",  
-                                    ax=ax, legend=legend)
-                # for line in g.get_lines():
-                #     ax.fill_between(line.get_xdata(), [0], color='blue', alpha=.25)
-
-                if legend: 
-                    # make 2 cols if there are many lagend labels
-                    sns.move_legend(g, loc="upper right", 
-                                    bbox_to_anchor=(1.6,1), frameon=True) 
+            if ('all' in subset) or (cov_name in subset):
+                # create figure
+                sns.set_style("whitegrid")
+                fs = 12
+                f,axes = plt.subplots(1, len(dst_nodes), 
+                                        figsize=(2+2*len(dst_nodes), 2.5),
+                                        sharex=False, sharey=True)
+                axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
+            
+                for i, (ax, node) in enumerate(zip(axes, dst_nodes)):
+                    legend = (i==(len(axes)-1))
+                    # just print the values that will be plot
+                    # add 1% random noise to the probas of different cov_name states for better visualization
+                    df[f"{node}_probas"] = df[f"{node}_probas"] + np.random.uniform(-1,1, size=len(df))
+                    g = sns.lineplot(df, hue=cov_name, 
+                                        alpha=0.8,
+                                        x=node, y=f"{node}_probas",  
+                                        ax=ax, legend=legend)
+                    # for line in g.get_lines():
+                    #     ax.fill_between(line.get_xdata(), [0], color='blue', alpha=.25)
+                    if legend: 
+                        # make 2 cols if there are many lagend labels
+                        sns.move_legend(g, "upper left", bbox_to_anchor=(1,1.2), frameon=True) 
+                        
+                    # set xlabel and ylabel  and title
+                    ax.set_title(r"{}  $\longmapsto$".format(cov_name)+'\n'+node, fontsize=fs)
+                    ax.set_ylabel("Proba. dist. (%)", fontsize=fs)
+                    ax.set_xlabel(None)
+                    ax.set_ylim([0,100]) # probability
                     
-                # set xlabel and ylabel  and title
-                ax.set_title(node, fontsize=fs)
-                ax.set_ylabel("Proba. dist. (%)", fontsize=fs)
-                ax.set_ylim([0,100]) # probability
-                
-                # set the ticks to be same as the unique values in the list
-                states = df[node].sort_values().unique().tolist() 
-                new_tick_labels, new_ticks = [], []
-                for i, tick in enumerate(states):
-                    if isinstance(tick, str):
-                        new_ticks.append(i)
-                        # trim the xtick labels if it is too long
-                        if len(tick)>5: tick = tick[:5]
-                        new_tick_labels.append(tick)
-                    elif isinstance(tick, float):
-                        if tick.is_integer(): tick = int(tick) 
-                        new_ticks.append(tick)
-                        new_tick_labels.append(str(tick))
-                    elif isinstance(tick, bool):
-                        new_ticks.append(tick)
-                        new_tick_labels.append(str(bool(tick)))
-                # print("ticklabels",new_tick_labels, [t.get_text() for t in ax.get_xticklabels()])
-                ax.set_xticks(new_ticks, labels=new_tick_labels) 
-        
-            plt.tight_layout()
-            plt.show()    
+                    # set the ticks to be same as the unique values in the list
+                    states = df[node].sort_values().unique().tolist() 
+                    new_tick_labels, new_ticks = [], []
+                    for i, tick in enumerate(states):
+                        if isinstance(tick, str):
+                            new_ticks.append(i)
+                            # trim the xtick labels if it is too long
+                            if len(tick)>5: tick = tick[:5]
+                            new_tick_labels.append(tick)
+                        elif isinstance(tick, float):
+                            if tick.is_integer(): tick = int(tick) 
+                            new_ticks.append(tick)
+                            new_tick_labels.append(str(tick))
+                        elif isinstance(tick, bool):
+                            new_ticks.append(tick)
+                            new_tick_labels.append(str(bool(tick)))
+                    # print("ticklabels",new_tick_labels, [t.get_text() for t in ax.get_xticklabels()])
+                    ax.set_xticks(new_ticks, labels=new_tick_labels) 
+            
+                plt.tight_layout()
+                plt.show()   
     
 
     def draw_dag(self):
@@ -486,68 +545,75 @@ class ToyBrainsData:
         for shape_pos in self.SHAPE_POS.keys():
             
             self.GENVARS.update({
-                # number of sides in the regular polygon from 3 (triangle) to 12
-                f'{shape_pos}_curv': PROB_VAR(f'{shape_pos}_curv',
-                                              np.arange(3,12, dtype=int)), 
                 # color of the regular polygon from shades of green to shades of red
-                f'{shape_pos}_int' : PROB_VAR(f'{shape_pos}_int', 
-                                            ['0-indianred','1-salmon','2-lightsalmon',
-                                             '3-palegoldenrod','4-lightgreen','5-darkgreen']), 
-                # the radius of the circle inside which the regular polygon is drawn
-                f'{shape_pos}_vol-rad': PROB_VAR(f'{shape_pos}_volrad', 
-                                            np.arange(2,5+1, dtype=int)),  
+                f'{shape_pos}_int' : PROB_VAR(f'{shape_pos}_int',
+                                                ['0-indianred','1-salmon','2-lightsalmon',
+                                                '3-palegoldenrod','4-lightgreen','5-darkgreen']), 
+                # the final volume of the circle inside which the regular polygon is drawn
+                # 4 steps of radius [2,3,4,5] times 4 steps of curvature (sides of the regular polygon) from [3,4,6,12]
+                f'{shape_pos}_vol': PROB_VAR(f'{shape_pos}_vol',
+                                            np.arange(0, 16, dtype=int)),
                 # TODO # rot = np.random.randint(0,360)
             })
         
         
         
-    def generate_dataset_table(self, n_samples, outdir_suffix='n',
-                               verbose=1):
+    def generate_dataset_table(self, n_samples, 
+                               outdir_suffix='', 
+                               outdir_append_sample_size=True, split='train'):
         self._init_df()
         
-        if self.debug:
+        if self.verbose>2:
             print(f"Generative parameter {' '*7}|{' '*7} States \n{'-'*60}")
             for name, var in self.GENVARS.items():
                 print(f"{name} {' '*(25-len(name))} {var.states}")
-            
-        if verbose>0: print("Sampling image gen. attributes for n={} toybrain samples".format(n_samples))
         
         for subID in tqdm(range(n_samples)):
             # first reset all generative image attributes to have uniform distribution
             self._reset_vars()
-            # (1) sample the covariates and labels for this data point
+            # (1) sample the covariates, labels, or any parent gen.attrs. for this data point
             covars = self._adjust_covar_dists_and_sample()
             #  and adjust the image attribute probability distributions
-            self._adjust_genvar_dists(covars)
-            # (2) sample the image attributes conditional on the sampled labels and covariates 
-            genvars = {var_name: gen_var.sample() for var_name, gen_var in self.GENVARS.items()}
-            
+            self._adjust_genvar_dists(covars) 
+            # (2) sample the image attributes conditional on the sampled labels and covariates
+            genvars = {}
+            for var_name, gen_var in self.GENVARS.items():
+                if gen_var.last_sample is None:
+                    genvars.update({var_name: gen_var.sample()})
+                else: # might already be sampled during adjust_covar_dists_and_sample() so reuse it
+                    genvars.update({var_name: gen_var.last_sample})
             # combine the gen params 'brain-vol_radmajor' and 'brain-vol_radminor' into one 'brain_vol'
-            genvars.update({'brain-vol': math.pi*genvars['brain-vol_radmajor']*genvars['brain-vol_radminor'] })
-            # calculate the volume of all regular_polygon shapes
-            for shape_pos in self.SHAPE_POS.keys():
-                genvars.update({
-                    f'{shape_pos}_vol': 
-                    self.area_of_regular_polygon(
-                        n=genvars[f'{shape_pos}_curv'], r=genvars[f'{shape_pos}_vol-rad'])})# TODO
-                
+            genvars.update({'brain-vol': math.pi * genvars['brain-vol_radmajor'] * genvars['brain-vol_radminor']})
+            # TODO calculate the exact volume of the regular polygon shapes and store that too? 
+
             # (3) store the covars and then the generative attributes
             for k,v in covars.items():
                 self.df.at[f'{subID:05}', k] = v
             for k,v in genvars.items():
                 self.df.at[f'{subID:05}', k] = v
+
+            if self.save_probas:
+                # also store the probability of the states of the genvars and the covars
+                all_vars = list(self.GENVARS.items()) + list(self.COVARS.items())
+                for k,v in all_vars:
+                    self.df.at[f'{subID:05}', f'probas_{k}'] = v.act(v.weights).round(2).tolist()
         
         # create the output folder and save the table
         # add sample size to output dir name and create the folders
-        if outdir_suffix[0]=='n': 
-            outdir_suffix = outdir_suffix.replace('n',f"n{n_samples}", 1)
+        n_samples_regex = re.compile(r"n\d+")
+        outdir_name = 'toybrains'
+        # append sample size only if it is not already in the outdir_suffix
+        if outdir_append_sample_size and not n_samples_regex.search(outdir_suffix): 
+            outdir_name += f"_n{n_samples}"
+        if outdir_suffix:
+            outdir_name += f'_{outdir_suffix}'
             
-        self.DATASET_DIR = f"{self.OUT_DIR}_{outdir_suffix}"
+        self.DATASET_DIR = f"{self.OUT_DIR}{outdir_name}/{split}/"
         # delete previous folder if they already exist
         shutil.rmtree(self.DATASET_DIR, ignore_errors=True)
         os.makedirs(self.DATASET_DIR)
         # save the dataframe in the dataset folder
-        self.df.to_csv(f"{self.DATASET_DIR}/toybrains_{outdir_suffix}.csv")
+        self.df.to_csv(f"{self.DATASET_DIR}/{outdir_name}.csv")
         
         return self.df
     
@@ -608,9 +674,14 @@ class ToyBrainsData:
         # (c) draw 5 shapes (triangle, square, pentagon, hexagon, ..)
         # with different size, color and rotations
         for shape_pos, (x,y) in self.SHAPE_POS.items():
-
-            draw.regular_polygon((x,y,genvars[f'{shape_pos}_vol-rad']), 
-                                 n_sides=genvars[f'{shape_pos}_curv'], 
+            vol = genvars[f'{shape_pos}_vol']
+            rad = 2 + vol//4 # radius of the regular polygon that fit best in the brain region are in range [2,5]
+            # number of sides in the regular polygon from 3 (triangle) to 12 (dodecagon) which is almost a circle
+            # the higher the number of sides the higher the total volume of the shape
+            n_sides = [3,4,7,12][vol%4]
+            
+            draw.regular_polygon((x, y, rad), 
+                                 n_sides=n_sides, 
                                  rotation=np.random.randint(0,360),
                                  fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
                                  outline=self.get_color_val(genvars['brain-int_border']))
@@ -627,8 +698,12 @@ class ToyBrainsData:
             
             
     def load_generated_dataset(self, dataset_path):
+        dataset_path = dataset_path + '/train/'
+        data_table = glob(f'{dataset_path}/toybrains_*.csv')
+        assert len(data_table)==1, f"It is expected to find only one dataset table. However,\
+ at the provided location {dataset_path} the following dataset tables were found = '{data_table}'. "
         self.DATASET_DIR = dataset_path
-        self.df = pd.read_csv(glob(f'{dataset_path}/toybrains_*.csv')[0])
+        self.df = pd.read_csv(data_table[0])
          
             
     def get_color_val(self, color):
@@ -658,12 +733,12 @@ class ToyBrainsData:
                             input_feature_sets=["attr_all", 
                                                  "attr_subsets", 
                                                  "cov_subsets"],
-                            output_labels=["lbls", "covs"],
+                            output_labels_prefix=["lbl", "cov"],
                             model_name="LR", model_params={},
                             conf_ctrl={},
                             metrics=["r2", "balanced_accuracy", "roc_auc"],
                             holdout_data=None,
-                            compute_shap=False,
+                            # compute_shap=False,
                             outer_CV=5, n_jobs=-1, 
                             verbose=0,
                             random_seed=None):
@@ -695,7 +770,7 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
 using self.generate_dataset_table() method or load an already generated dataset using \
 self.load_generated_dataset()"  
         for metric in metrics:
-            assert metric in sklearn.metrics.get_scorer_names(), f"metric_name '{metric}' is invalid.\
+            assert metric in list(sklearn.metrics.get_scorer_names()) + self.my_custom_scorers, f"metric_name '{metric}' is invalid.\
     It should be one of the sklearn.metrics.get_scorer_names()"
         
         start_time = datetime.now()
@@ -722,15 +797,13 @@ self.load_generated_dataset()"
                 self._load_images(df_data_i, name=splitname, verbose=verbose)
 
         labels = []
-        if "lbls" in output_labels:
-            labels += self.df.filter(regex = '^lbl').columns.tolist()  
-        if "covs" in output_labels:
-            labels += self.df.filter(regex = '^cov').columns.tolist()
+        for lbl_prefix in output_labels_prefix:
+            labels += self.df.filter(regex = f'^{lbl_prefix}').columns.tolist()  
         assert len(labels)>0, "no labels are selected to be predicted. Please select at least one label from ['lbls', 'covs']"
 
         # create the directory to store the results
         model_params_str = self._convert_model_params_to_str(model_params)
-        results_out_dir = f"{self.DATASET_DIR}/baseline_results/{model_name}/{model_params_str}" 
+        results_out_dir = f"{self.DATASET_DIR}/../baseline_results/{model_name}/{model_params_str}" 
         shutil.rmtree(results_out_dir, ignore_errors=True)
         os.makedirs(results_out_dir)
         
@@ -744,7 +817,6 @@ self.load_generated_dataset()"
             # get the respective list of input feature columns for each feature_type 
             for fea_name, fea_cols in self._get_feature_cols(input_feature_sets, 
                                                              lbl=lbl).items():
-
                 # if input is images append the loaded image pixel arrays to the dataframe
                 if fea_name == "images":
                     df_data = df_data.join(fea_cols['traintest']) # fea_cols is a dict {split: dataframe, ..}
@@ -757,7 +829,6 @@ self.load_generated_dataset()"
 
                 # apply a confound control methods if requested
                 for conf_ctrl_method, conf_cols in conf_ctrl.items():
-
                     # only select the input features and the label in the data table
                     data_columns = fea_cols + [lbl] + conf_cols
                     df_data_i = df_data[data_columns]
@@ -801,7 +872,7 @@ self.load_generated_dataset()"
                                 inp_fea_list = fea_cols,
                                 holdout_data = holdout_dfs_dict,
                                 results_out_dir=results_out_dir,
-                                compute_shap = compute_shap,
+                                # compute_shap = compute_shap,
                                 metrics=metrics,
                                 random_seed=random_seed, 
                                 verbose=verbose,
@@ -872,8 +943,7 @@ n={len(c.cat.categories)} unique value. Currently we support a max of 10 and min
                 new_data, _ = sampler.fit_resample(data, y=data[lbl], groups=groups)
             except Exception as e:
                 if 'has only 1 class or very few subjects in 1 of the classes' in str(e):
-                    print(e)
-                    print("[WARN] skipped confound control for this sample.")
+                    print(e, "[WARN] skipped confound control for this sample.")
                     return data, False
             
         # elif method == "residualize":
@@ -895,7 +965,7 @@ Data changed size from {data.shape} to {new_data.shape}.")
                             metrics, 
                             inp_fea_list,
                             holdout_data,
-                            compute_shap,
+                            # compute_shap,
                             results_out_dir,
                             random_seed, verbose, 
                             results_kwargs):
@@ -914,21 +984,21 @@ Data changed size from {data.shape} to {new_data.shape}.")
             print(f'Confound control: {results_kwargs["type"]}')
 
         # run logistic regression and linear regression for tabular dataset # TODO support SVM too
-        compute_shap = (compute_shap) and (model_name.upper() in ['LR'] and inp in ["attr_all"]) 
+        # compute_shap = (compute_shap) and (model_name.upper() in ['LR'] and inp in ["attr_all"]) 
         results_dict, model_config = fitmodel(
                                             train_data, test_data,
                                             X_cols=inp_fea_list, y_col=out,
                                             model_name=model_name, model_params=model_params,
                                             holdout_data=holdout_data,
-                                            compute_shap=compute_shap,
+                                            # compute_shap=compute_shap,
                                             metrics=metrics,
                                             random_seed=random_seed)
 
-        if compute_shap:
-            # extract the SHAP scores and store as individual columns
-            shap_scores = results_dict['shap_contrib_scores']
-            results_dict.update({f"shap__{k}":v for k,v in shap_scores})
-            results_dict.pop('shap_contrib_scores')
+        # if compute_shap:
+        #     # extract the SHAP scores and store as individual columns
+        #     shap_scores = results_dict['shap_contrib_scores']
+        #     results_dict.update({f"shap__{k}":v for k,v in shap_scores})
+        #     results_dict.pop('shap_contrib_scores')
 
         result = {
             "inp": inp, "out": out, "trial": trial,
@@ -972,15 +1042,17 @@ Data changed size from {data.shape} to {new_data.shape}.")
     
 
     def _convert_model_params_to_str(self, model_params):
-        if len(model_params)==0: return "default"
-        return slugify("_".join([f"{k}-{v}" for k,v in model_params.items()]))
+        if len(model_params)==0: 
+            return "default"
+        else:
+            model_parems_str = "_".join([f"{k}-{v}" for k,v in model_params.items()])
+            return slugify(model_parems_str)
 
 
     def _get_feature_cols(self, feature_types, lbl=''):
         
         all_attr_cols = [n for n,_ in self.GENVARS.items()]
         all_cov_cols  = [n for n,_ in self.COVARS.items() if lbl!=n]
-                
         # create a list all cov to image attribute relations in the CGM
         attr_subsets = []
         cov_subsets = []
@@ -1089,18 +1161,18 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--n_samples', default=100, type=int)
     parser.add_argument('--dir', default='dataset/toybrains', type=str)
     parser.add_argument('-c', default = 'configs.lbl1cov1', type=str)
-    parser.add_argument('-d', '--debug',  action='store_true')
+    parser.add_argument('-v', '--verbose', default=0, type=int)
     parser.add_argument('-j','--n_jobs', default=20, type=int)
     parser.add_argument('-s','--suffix', default = 'n', type=str)
     # parser.add_argument('--img_size', default=64, type=iny, help='the size (h x h) of the generated output images and labels')
     args = parser.parse_args()
 
     IMG_SIZE = 64 # 64 pixels x 64 pixels
-    RANDOM_SEED = 42 if args.debug else None
+    RANDOM_SEED = 42 if args.verbose>2 else None
     # create the output folder
     dataset = ToyBrainsData(out_dir=args.dir, 
                             config=args.c,
-                            img_size=IMG_SIZE, debug=args.debug, 
+                            img_size=IMG_SIZE, verbose=args.verbose, 
                             seed=RANDOM_SEED)   
     # create the shapes dataset
     dataset.generate_dataset(n_samples=args.n_samples, 

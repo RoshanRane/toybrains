@@ -6,14 +6,11 @@ import pandas as pd
 import matplotlib.pyplot as plt 
 import seaborn as sns
 import matplotlib.image as mpimg
-from tqdm.auto import tqdm
 
 import json
 import matplotlib
 from  matplotlib.ticker import FuncFormatter
 from matplotlib.colors import is_color_like
-from colordict import ColorDict, rgb_to_hex
-import shap
 
 
 def show_images(img_files, n_rows=1, n_cols=10, title=''):
@@ -52,19 +49,18 @@ def plot_col_counts(df, title=''):
     for col in cols:
         if df_copy[col].nunique()==2:
             plottypes.update({col:'pie'})
-        elif df_copy[col].dtype.name == 'object' or isinstance(df_copy[col].iloc[0], str):
-            plottypes.update({col:'bar'})
-        elif 'float' in df_copy[col].dtype.name:
-            # round the floats to 2 decimal
-            df_copy[col] = df[col].round(1)
+        elif pd.api.types.is_numeric_dtype(df_copy[col]):
+            df_copy[col] = df[col].round(1) # round the floats to 1 decimal
             # use hist plot if there are more than 10 states  
-            if df_copy[col].nunique()<10:
+            if df_copy[col].nunique()<10: ## hardcoded
                 plottypes.update({col:'bar'})
             else:
                 plottypes.update({col:'hist'})
-            # if all values are int then covert col to int dtype
-            if df_copy[col].dropna().apply(float.is_integer).all():
-                df_copy[col] = df_copy[col].astype(int)
+            # # if all values are int then covert col to int dtype
+            # if df_copy[col].dropna().apply(float.is_integer).all():
+            #     df_copy[col] = df_copy[col].astype(int)
+        else: # not pd.dtypes.is_numeric_dtype(df_copy[col]):
+            plottypes.update({col:'bar'})
             
     # re-sort dataframe cols by dtypes
     cols = df_copy.dtypes.sort_values().index 
@@ -75,7 +71,7 @@ def plot_col_counts(df, title=''):
     if subplot_overflows!=0: subplot_nrows+=1
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(2*subplot_ncols,1+1*subplot_nrows))
+                          figsize=(1+2*subplot_ncols,1+1*subplot_nrows))
     axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
     if title: f.suptitle(title, fontsize=fs+2)
     # f.supylabel("Count", fontsize=fs)
@@ -88,27 +84,25 @@ def plot_col_counts(df, title=''):
             
         col = cols[i]
         plottype = plottypes[col]
-            
+        
+        df_copy = df_copy.sort_values(by=col)
         if plottype == 'bar':
             # check if the attribute represents colors then use the same color names for the bar plot
             if isinstance(df_copy[col].iloc[0], str) and is_color_like(df_copy[col].iloc[0].split('-')[-1]):
-                colormap = ColorDict()
-                colors = [rgb_to_hex(colormap[c.split('-')[-1]]) for c in df_copy[col].sort_values().unique().tolist()]
-
                 sns.countplot(data=df_copy, x=col, ax=ax, 
-                             order=df_copy[col].sort_values().unique())
+                             order=df_copy[col].unique().sort_values())
             else:
                 sns.countplot(data=df_copy, x=col, ax=ax)
             # format the xtick labels 
-            if 'int' in df_copy[col].dtype.name:
+            if pd.api.types.is_integer_dtype(df_copy[col]):
                 ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: int(x)))
-            elif isinstance(df_copy[col].iloc[0], str):
+            elif pd.api.types.is_string_dtype(df_copy[col]):
                 ax.set_xticks(ax.get_xticks())
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
                 
         elif plottype == 'hist':
             bins = df_copy[col].nunique()//5
-            sns.histplot(data=df_copy, x=col, ax=ax, kde=True, bins=bins, ) #multiple='fill'
+            sns.histplot(data=df_copy, x=col, ax=ax, kde=False, bins=bins, ) #multiple='fill'
         elif plottype == 'pie':
             cnt = df_copy[col].value_counts().sort_index()
             ax.pie(cnt, labels=cnt.index,
@@ -117,17 +111,19 @@ def plot_col_counts(df, title=''):
         ax.set_ylabel(col, fontsize=fs)
         ax.set_xlabel(None)
 
-    # plt.tight_layout()
+    plt.tight_layout()
     
     
 def plot_col_dists(df, attr_cols, cov_cols, title=''):
     
     df = df.copy()
-    cov_cols = sorted(cov_cols)
-    attr_cols = sorted(attr_cols)
-    subplot_nrows = len(cov_cols)
-    subplot_ncols = len(attr_cols)
-    fs=12
+    # subsample a max of 1000 samples to speed up the planning
+    if len(df)>1000: df = df.sample(1000)
+
+    # remove duplicates and sort
+    cov_cols = sorted(list(set(cov_cols)))
+    attr_cols = sorted(list(set(attr_cols)))
+
     # convert all columns to numerical
     for col in attr_cols:
         if not np.issubdtype(df[col].dtype, np.number):
@@ -136,22 +132,40 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
             
     # if the covariates are continuous then bin them
     for col in cov_cols:
-        if df[col].nunique()>5:
+        if np.issubdtype(df[col].dtype, np.number) and df[col].nunique()>5:
             df[col] = pd.cut(df[col], bins=3, precision=0)
     
+    subplot_nrows = len(cov_cols)
+    subplot_ncols = len(attr_cols)
+    fs=12
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(2+1.5*subplot_ncols, 1.5*subplot_nrows),
-                          sharex="col", sharey="col")
-    if title: f.suptitle(title, fontsize=fs+4)
+                          figsize=(2+1.5*subplot_ncols, 1+1.5*subplot_nrows),
+                          sharex="col", sharey=True)
+    axes = axes if axes.ndim>1 else axes.reshape(1,-1)
+    if title: f.suptitle(title, fontsize=fs+4, y=1.01)
     
     for i, axis_row in enumerate(axes):
         for j, ax in enumerate(axis_row):
+            draw_legend=False if j!=0 else True
             cov, attr = cov_cols[i], attr_cols[j]
-            g = sns.kdeplot(df, x=attr, hue=cov, ax=ax, fill=True, legend=(j==0))
-            if j==0: 
+            # if the attr is categorical then encode it to numerical
+            if not pd.api.types.is_numeric_dtype(df[attr]):
+                df[attr] = df[attr].astype('category').cat.codes
+                df[attr] = df[attr].astype(int)
+                
+            if np.issubdtype(df[attr].dtype, str):
+                df[attr] = df[attr].map({v:i for i,v in enumerate(sorted(df[attr].unique()))})
+
+            # sort df by the covariate and attribute
+            g = sns.kdeplot(df.sort_values(by=[cov]), 
+                            x=attr, hue=cov, 
+                            ax=ax, fill=True, legend=draw_legend,
+                            bw_adjust=3, gridsize=10, cut=0, # adjust the smoothing
+                            warn_singular=False)
+            if draw_legend: 
                 # make 2 cols if there are many lagend labels
-                ncol=2 if len(ax.legend_.legendHandles)>3 else 1
+                ncol = 2 if len(df[cov].unique())>3 else 1
                 sns.move_legend(g, loc="upper left", 
                                 bbox_to_anchor=(-1.5,1.), ncol=ncol,
                                 frameon=True, 
@@ -160,8 +174,8 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
             # set xlabel and ylabel at the top and leftside of the plots resp.
             ax.set_ylabel(None)
             ax.set_xlabel(attr.replace('gen_',''), fontsize=fs) if i==len(axes)-1 else ax.set_xlabel(None)
-            # turn off the density ticks
-            ax.set_yticklabels([])
+            # fix the density range to 0, 0.5 to make them comparable
+            ax.set_ylim(0,0.35)
             if i==0: ax.set_title(attr.replace('gen_',''), fontsize=fs)
             
     f.supylabel("Covariates & labels", fontsize=fs+2)
@@ -177,13 +191,17 @@ def show_contrib_table(dfs_results,
                        color=None):
     '''reorganize the generated baseline results and display it as a pretty table with style:
     average the results across trials after grouping by ['dataset','out', 'inp']'''
-    if isinstance(dfs_results, (list, tuple)): dfs = pd.concat(dfs_results).copy()
+    if isinstance(dfs_results, (list, tuple)): 
+        dfs = pd.concat(dfs_results).copy()
+    else:
+        dfs = dfs_results.copy()
     
     # make the dataset name shorter for prettiness
     dfs = dfs.dropna(subset=["dataset"])
-    dfs['dataset'] = dfs['dataset'].apply(lambda x: os.path.basename(x.rstrip('/')))
-
-    grp_by = ['out','inp','type','dataset']
+    dfs['dataset'] = dfs['dataset'].apply(lambda x: x.replace('/train/','').rstrip('/').split('/')[-1])
+    # append model parameters info to the model name
+    dfs['model'] = dfs.apply(lambda row: f"{row['model']}({row['model_params']})", axis=1)
+    grp_by = ['out','inp','model','type','dataset']
     if not avg_over_trials: grp_by.append('trial')
 
     if filter_rows:
@@ -459,7 +477,7 @@ and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-
     
     df = df_original.copy()
     fs = 12
-    assert df.index.name.lower() == 'dataset', f"index of the provided df should be 'dataset' but it is {df.index.name}"
+    assert (df.index.name is not None) and (df.index.name.lower() == 'dataset'), f"index of the provided df should be 'dataset' but it is {df.index.name}"
     # shorten the 'dataset' name for the plot labels to only contain its suffix with cy, cX, yX
     df.index = df.index.map(lambda x: x.split('_')[-1])
     # sort the X axis by 100*(X<-y) + 10*(X<-c * c->y)/2 + cX

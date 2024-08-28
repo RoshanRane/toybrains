@@ -1,10 +1,12 @@
 import numpy as np
-from sklearn.metrics import log_loss
-from sklearn.dummy import DummyClassifier
 from scipy.special import softmax, expit
+from sklearn.preprocessing import OneHotEncoder as _OneHotEncoder
+from sklearn.dummy import DummyClassifier as _DummyClassifier
 
 
-def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
+####################################################################################################
+
+def _explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
                        returnloglikes=False, unique_y=[0,1]):
     """Computes explained_deviance score to be comparable to explained_variance
     Function taken from https://github.com/RoshanRane/Deviance_explained/blob/main/deviance.py"""
@@ -27,11 +29,11 @@ def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None,
     unique_y = np.unique(y_true)
     # compute a null model's predicted probability
     X_dummy = np.zeros(len(y_true))
-    y_null_probas = DummyClassifier(strategy='prior').fit(X_dummy, y_true).predict_proba(X_dummy)
-    #strategy : {"most_frequent", "prior", "stratified", "uniform",  "constant"}
+    # strategy can be {"most_frequent", "prior", "stratified", "uniform",  "constant"}
+    y_null_probas = _DummyClassifier(strategy="prior").fit(X_dummy, y_true).predict_proba(X_dummy)
     # suggestion from https://stackoverflow.com/a/53215317
-    llf = -log_loss(y_true, y_pred_probas, normalize=False, labels=[0,1]) # unique_y TODO remove hardcoding
-    llnull = -log_loss(y_true, y_null_probas, normalize=False, labels=[0,1]) # unique_y TODO remove hardcoding
+    llf = -_log_loss(y_true, y_pred_probas, normalize=False, labels=unique_y) 
+    llnull = -_log_loss(y_true, y_null_probas, normalize=False, labels=unique_y) 
     ### McFadden’s pseudo-R-squared: 1 - (llf / llnull)
     explained_deviance = 1 - (llf / llnull)
     ## Cox & Snell’s pseudo-R-squared: 1 - exp((llnull - llf)*(2/nobs))
@@ -43,4 +45,70 @@ def explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None,
 
 
 def d2_metric_probas(y, y_pred):
-    return explained_deviance(y_true=y, y_pred_probas=y_pred)
+    # convert values of y to one-hot encoded if not already
+    y = np.array(y)
+    if  y[0] not in [0,1]:
+        enc = _OneHotEncoder(sparse_output=False).fit(y.reshape(-1,1))
+        y = enc.transform(y.reshape(-1,1))
+        if y.shape[1] > 2: 
+            raise ValueError("explained_deviance currently only supports binary labels but y has {} classes".format(y.shape[1]))
+        else:
+            y = y[:,1].squeeze()
+
+    return _explained_deviance(y_true=y, y_pred_probas=y_pred,  unique_y=[0,1]) # unique_y TODO remove hardcoding
+
+
+####################################################################################################
+
+def r2_logodds(y, y_pred):
+    """Computes the R^2 of the log-odds space for the binary variable y. 
+    Args:
+        y      : a binary variable
+        y_pred : y_pred_probas (probability of class 1)
+    """
+    # check that y is binary
+    y_states = np.unique(y)
+    if len(y_states) > 2:
+        raise ValueError("r2_logodds() metric is only defined for binary variables")
+    # if y_true is string convert to binary
+    if isinstance(y_states[0], str):
+        y = _OneHotEncoder(sparse_output=False).fit(y.reshape(-1,1))
+        y = y[:,1].squeeze()
+    # convert y to (pseudo) probabilities
+    y_true_probas = np.array([yi-0.001 if yi == 1 else yi+0.001 for yi in y])
+    y_true_logodds = np.log(y_true_probas / (1 - y_true_probas))
+    # compute the log odds from the probabilities
+    y_pred_logodds = np.log(y_pred / (1 - y_pred))
+    # compute the R^2 of the log-odds space
+    ss_res = np.sum((y_true_logodds - y_pred_logodds) ** 2)
+    ss_tot = np.sum((y_true_logodds - np.mean(y_true_logodds)) ** 2)
+    r2_logodds = 1 - ss_res / ss_tot
+    return r2_logodds
+
+####################################################################################################
+
+def loglikelihood_ratio(y, y_pred, y_true_probas=None):
+    ''' Compute the loglikelikehood(y_true_probas)/ loglikelikehood(y_pred_probas) )'''
+    y = np.array(y)
+    states = np.unique(y)
+    n_states = len(states)
+    
+    # check if one hot encoding is needed first
+    if isinstance(states[0], str):
+        enc = _OneHotEncoder(sparse_output=False).fit(y.reshape(-1,1))
+        y = enc.transform(y.reshape(-1,1))
+        n_states = y.shape[-1]
+        y = y[:,1].squeeze()
+    
+    assert n_states == 2, "loglikelihood_ratio() currently only supports binary labels"
+
+    ## calculate pseudo probabilities of y, if probabilities are not provided
+    if y_true_probas is None:
+        y_true_probas = np.clip(y, 1e-10, 1 - 1e-10)
+
+    ## compute the true log-likelihood
+    ll_true = _log_loss(y, y_true_probas, normalize=True, labels=states)
+    ll_pred = _log_loss(y, y_pred, normalize=True, labels=states) 
+
+    return ll_pred / ll_true
+    

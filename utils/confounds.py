@@ -166,7 +166,7 @@ class ConfoundRegressorContinuousX(BaseEstimator) :
 
         if self.debug: 
             print(
-                "[DEBUG] ConfoundRegressorContinuousX.regress_features()called with \X.shape={}y.shape={}".format(X.shape, y.shape))       
+                "[DEBUG] ConfoundRegressorContinuousX.regress_features()called with X.shape={}y.shape={}".format(X.shape, y.shape))       
 
         confounder = age
 

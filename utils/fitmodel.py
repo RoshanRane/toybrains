@@ -1,5 +1,6 @@
 import numpy as np
 
+import sklearn
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector as selector
 from sklearn.linear_model import LogisticRegression, ElasticNet
@@ -13,24 +14,42 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import make_scorer, get_scorer, get_scorer_names
 
 from scipy.special import logit
-import shap
+# import shap
 
 # add custom imports
-from utils.metrics import d2_metric_probas
+from utils.metrics import d2_metric_probas, r2_logodds, loglikelihood_ratio
 
-   
+def check_if_continuous(states):
+    '''Check if the states of the label are continuous or not'''
+    continuous = True
+    for v in states:
+        try:
+            float(v)
+        except ValueError:
+            continuous = False
+            break
+    return continuous
     
+
 def fitmodel(df_train, df_test,
             X_cols, y_col,
             model_name='LR', model_params={},
             holdout_data=None,
-            compute_shap=False, 
+            # compute_shap=False, 
             random_seed=None,
             metrics=["r2"]):
     '''Fit a model to the given dataset and estimate the model performance using cross-validation.
     Also, estimate the SHAP scores if compute_shap is set to True.
     '''
     results = {}
+
+    # if the label y is string formated (categories) then one-hot encode it
+    if isinstance(df_train[y_col].iloc[0], str):
+        df_train[y_col] = df_train[y_col].astype('category')
+        df_test[y_col] = df_test[y_col].astype('category')
+        # convert the categories to integers
+        df_train[y_col] = df_train[y_col].cat.codes
+        df_test[y_col] = df_test[y_col].cat.codes
     
     # split the data into input features and output labels
     train_X, train_y = df_train[X_cols], df_train[y_col]
@@ -60,9 +79,13 @@ def fitmodel(df_train, df_test,
     
     # set the model and its hyperparameters
     n_classes = train_y.nunique()
-    regression_task = (n_classes > 5)
+    # check that all states of the label are numerical, if yes then its a regression task
+    regression_task = False
+    if n_classes>2:
+        regression_task = check_if_continuous(train_y.unique())
+
     if model_name.upper() == 'LR':
-        if regression_task: # TODO test
+        if regression_task:
             if 'l1_ratio' not in model_params: model_params.update(dict(l1_ratio=0))
             if 'alpha' not in model_params: model_params.update(dict(alpha=1.0))
             model = ElasticNet(random_state=random_seed,
@@ -142,14 +165,19 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     
     # Train and fit the model
     clf = make_pipeline(preprocessor, model)
-    # print("[D] clf = ", clf)
+    # print(f"[D] X_cols = {X_cols} train_X.shape = {train_X.shape}")
     clf.fit(train_X, train_y)
     
-    # estimate all requested metrics using the best model
+    # estimate all requested metrics using the best model   
     for metric_name in metrics:
         # if classification then use d2_metric_probas instead of r2
-        if metric_name.lower() == "r2" and n_classes <= 5: 
-            metric_fn = make_scorer(d2_metric_probas, needs_proba=True)
+        metric_kwargs = {}
+        if metric_name.lower() == "r2" and not regression_task:     
+            metric_fn = make_scorer(d2_metric_probas, response_method="predict_proba")
+        elif metric_name.lower() == "r2_logodds" and not regression_task:
+            metric_fn = make_scorer(r2_logodds, response_method="predict_proba")
+        elif metric_name.lower() == "loglikelihood_ratio" and not regression_task:
+            metric_fn = make_scorer(loglikelihood_ratio, response_method="predict_proba")
         else:
             metric_fn = get_scorer(metric_name)
         
@@ -159,68 +187,74 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
         # if an additional holdout dataset is provided then also estimate the score on it
         if holdout_data is not None and len(holdout_data)>0:
             for holdout_name, holdout_data_i in holdout_data.items():
-                results.update({f"score_test_{holdout_name}_{metric_name}": 
-                                metric_fn(clf, holdout_data_i[X_cols], holdout_data_i[y_col])})
+                holdout_X, holdout_y = holdout_data_i[X_cols], holdout_data_i[y_col]
+                # one hot encode the label if it is in string format
+                if isinstance(holdout_y.iloc[0], str):
+                    holdout_y = holdout_y.astype('category')
+                    holdout_y = holdout_y.cat.codes
+
+                results.update({f"score_holdout_{holdout_name}_{metric_name}": 
+                                metric_fn(clf, holdout_X, holdout_y)})
 
     # SHAP explanations
-    shap_contrib_scores = None
-    if compute_shap:
-        preprocessing, best_model = clf[:-1], clf[-1]
-        # print("[D] best model = ", best_model)
-        data_train_processed = preprocessing.transform(train_X)
-        data_test_processed = preprocessing.transform(test_X)
-        all_data_processed = np.concatenate((data_train_processed,
-                                            data_test_processed), axis=0)
-        # transform the existing feature_names to include the one-hot encoded features
-        feature_names = train_X.columns.tolist()
-        new_feature_names = preprocessing.get_feature_names_out(feature_names)
-        n_feas = len(new_feature_names)
-        # remove preprocessor names from feature names
-        new_feature_names = [name.split("__")[-1] for name in new_feature_names]
-        explainer = shap.Explainer(best_model, 
-                                data_train_processed,
-                                feature_names=new_feature_names)
-        shap_values = explainer(all_data_processed)
-        base_shap_values = shap_values.base_values 
-        # get the model predicted probabilities to calculate C = probas - base for each sample
-        model_probas = best_model.predict_proba(all_data_processed) 
-        #  I verified that the shap values correspond to the second proba dim and not the first
-        model_probas = model_probas[:,1].squeeze()      
-        # calculate C = probas - base for each sample
-        logodds_adjusted = logit(model_probas) - base_shap_values
-        # now we expect the sum(shap_values) to be equal to logodds_adjusted for each sample
-        assert np.allclose(shap_values.values.sum(axis=1), logodds_adjusted), \
-            "sum(shap_values) != logodds_adjusted for some samples"
-        # scale shap values to positive values [0,inf] for each sample X
-        shap_val_mins = shap_values.values.min(axis=1)
-        shap_values_pos = (shap_values.values - shap_val_mins[:,np.newaxis])
-        # also apply these transforms to the RHS (logodds_centered) n_feas times
-        logodds_adjusted = (logodds_adjusted - n_feas*shap_val_mins)
-        # calculate shap value based contrib score for each feature
-        contribs = shap_values_pos / logodds_adjusted[:,np.newaxis]
+    # shap_contrib_scores = None
+#     if compute_shap:
+#         preprocessing, best_model = clf[:-1], clf[-1]
+#         # print("[D] best model = ", best_model)
+#         data_train_processed = preprocessing.transform(train_X)
+#         data_test_processed = preprocessing.transform(test_X)
+#         all_data_processed = np.concatenate((data_train_processed,
+#                                             data_test_processed), axis=0)
+#         # transform the existing feature_names to include the one-hot encoded features
+#         feature_names = train_X.columns.tolist()
+#         new_feature_names = preprocessing.get_feature_names_out(feature_names)
+#         n_feas = len(new_feature_names)
+#         # remove preprocessor names from feature names
+#         new_feature_names = [name.split("__")[-1] for name in new_feature_names]
+#         explainer = shap.Explainer(best_model, 
+#                                 data_train_processed,
+#                                 feature_names=new_feature_names)
+#         shap_values = explainer(all_data_processed)
+#         base_shap_values = shap_values.base_values 
+#         # get the model predicted probabilities to calculate C = probas - base for each sample
+#         model_probas = best_model.predict_proba(all_data_processed) 
+#         #  I verified that the shap values correspond to the second proba dim and not the first
+#         model_probas = model_probas[:,1].squeeze()      
+#         # calculate C = probas - base for each sample
+#         logodds_adjusted = logit(model_probas) - base_shap_values
+#         # now we expect the sum(shap_values) to be equal to logodds_adjusted for each sample
+#         assert np.allclose(shap_values.values.sum(axis=1), logodds_adjusted), \
+#             "sum(shap_values) != logodds_adjusted for some samples"
+#         # scale shap values to positive values [0,inf] for each sample X
+#         shap_val_mins = shap_values.values.min(axis=1)
+#         shap_values_pos = (shap_values.values - shap_val_mins[:,np.newaxis])
+#         # also apply these transforms to the RHS (logodds_centered) n_feas times
+#         logodds_adjusted = (logodds_adjusted - n_feas*shap_val_mins)
+#         # calculate shap value based contrib score for each feature
+#         contribs = shap_values_pos / logodds_adjusted[:,np.newaxis]
         
-        contribs_avg = contribs.mean(axis=0) 
+#         contribs_avg = contribs.mean(axis=0) 
 
-#         fi = 37
-#         print('[D] f={} sum(contrib[f])[:5] = {} \t sum(contrib_avg)={}\
-#  \ncontribs[:5,f]     \t= {} \
-#  \nShap_scaled[:5,f]  \t= {} \
-#  \nlogodds_adjusted[:5] \t= {}'.format(new_feature_names[fi], contribs[:5].sum(axis=1), contribs_avg.sum(),
-#             contribs[:5,fi], shap_values_pos[:5,fi],
-#             logodds_adjusted[:5]))
-#         print("[D]", contribs.mean(), contribs_avg)
-        # calculate mean of absolute shaps for each feature
-        # contribs = np.abs(shap_values.values)
-        # shap_contrib_scores = np.abs(best_model.coef_).squeeze().tolist() # model coefficients
-        #min max scale the avg contribs to [0,1]
-        contribs_avg = (contribs_avg - contribs_avg.min())/(contribs_avg.max() - contribs_avg.min())
-        # contribs_avg = contribs_avg - contribs_avg.min()
-        #scale it to sum to 1
-        contribs_avg = contribs_avg / contribs_avg.sum()
+# #         fi = 37
+# #         print('[D] f={} sum(contrib[f])[:5] = {} \t sum(contrib_avg)={}\
+# #  \ncontribs[:5,f]     \t= {} \
+# #  \nShap_scaled[:5,f]  \t= {} \
+# #  \nlogodds_adjusted[:5] \t= {}'.format(new_feature_names[fi], contribs[:5].sum(axis=1), contribs_avg.sum(),
+# #             contribs[:5,fi], shap_values_pos[:5,fi],
+# #             logodds_adjusted[:5]))
+# #         print("[D]", contribs.mean(), contribs_avg)
+#         # calculate mean of absolute shaps for each feature
+#         # contribs = np.abs(shap_values.values)
+#         # shap_contrib_scores = np.abs(best_model.coef_).squeeze().tolist() # model coefficients
+#         #min max scale the avg contribs to [0,1]
+#         contribs_avg = (contribs_avg - contribs_avg.min())/(contribs_avg.max() - contribs_avg.min())
+#         # contribs_avg = contribs_avg - contribs_avg.min()
+#         #scale it to sum to 1
+#         contribs_avg = contribs_avg / contribs_avg.sum()
 
-        shap_contrib_scores = [(fea_name, contribs_avg[i]) \
-                            for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
-        results.update({"shap_contrib_scores": shap_contrib_scores})
+#         shap_contrib_scores = [(fea_name, contribs_avg[i]) \
+#                             for i, fea_name in enumerate(new_feature_names)]  #contribs[:,i].std()
+#         results.update({"shap_contrib_scores": shap_contrib_scores})
 
     settings = {"model":model_name, "model_params":model_params,  "model_config":model}
     return results, settings
