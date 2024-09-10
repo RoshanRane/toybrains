@@ -100,8 +100,6 @@ at {toy.OUT_DIR}toybrains_n*_{outdir_suffix} ...")
 
     # remove the config files after generating the data for test datasets
     if split!="train": os.remove(config_fname)
-    print('[D]', config_fname, split)
-    print(toy.DATASET_DIR)
     return toy
 
 

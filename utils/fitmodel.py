@@ -17,7 +17,7 @@ from scipy.special import logit
 # import shap
 
 # add custom imports
-from utils.metrics import d2_metric_probas, r2_logodds, loglikelihood_ratio
+from utils.metrics import d2, r2_logodds, r2_odds, loglikelihood_ratio
 
 def check_if_continuous(states):
     '''Check if the states of the label are continuous or not'''
@@ -172,10 +172,12 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     for metric_name in metrics:
         # if classification then use d2_metric_probas instead of r2
         metric_kwargs = {}
-        if metric_name.lower() == "r2" and not regression_task:     
-            metric_fn = make_scorer(d2_metric_probas, response_method="predict_proba")
+        if metric_name.lower() == "d2" and not regression_task:     
+            metric_fn = make_scorer(d2, response_method="predict_proba")
         elif metric_name.lower() == "r2_logodds" and not regression_task:
             metric_fn = make_scorer(r2_logodds, response_method="predict_proba")
+        elif metric_name.lower() == "r2_odds" and not regression_task:
+            metric_fn = make_scorer(r2_odds, response_method="predict_proba")
         elif metric_name.lower() == "loglikelihood_ratio" and not regression_task:
             metric_fn = make_scorer(loglikelihood_ratio, response_method="predict_proba")
         else:

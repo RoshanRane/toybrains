@@ -38,34 +38,34 @@ import graphviz
 class PROB_VAR:
     '''Class to init a probabilistic variable that has states with a probability 
      distribution which can be modified and sampled from'''
-    def __init__(self, name, states, act=softmax):
+    def __init__(self, name, states, 
+                link_fn=softmax, basis_fn=lambda z: math.log(z) if z!=0 else 0): # avoid log(0)
         # link function set to the logistic function by default
         # for other options refer to https://www.statsmodels.org/stable/glm.html#link-functions
         self.name = name
         self.states = np.array(states)
         self.k = len(states)
-        self.act = self._make_act(act)
+        self._link_fn = link_fn
+        self._basis_fn = basis_fn
         self.reset_weights()
         
-    def _make_act(self, act):
-        ''' The activation function that converts the weights into probabilities with some sanity checks and fixes'''
-        def act_fn(weights):
-            probas = act(weights)
-            # force very low probas and -inf to 0.0 and very high probas and inf to 1.0
-            probas[probas<1e-5] = 0.0 
-            probas[probas>1-1e-5] = 1.0
-            # if the error is larger than 0.1 then force the probability to sum to one with a warning
-            if abs(1.0 - probas.sum())>0.1: 
-                print(f"[WARN] The probabilities of the states of {self.name} do not sum to 1.0. \
-                The sum of the probabilities computed from weight {self.weights.tolist()} = {probas.sum()}.\
-                The probabilities are being forced to sum to 1.")
-                probas = probas/probas.sum()
-            else:  # adjust minor rounding errors 
-                probas = probas/probas.sum()
+    def _apply_link_safely(self, z):
+        ''' The activation function that converts the weights into probabilities is applied with some safety checks and adjustments'''
+        probas = self._link_fn(z)
+        # force very low probas and -inf to 0.0
+        probas[probas<1e-5] = 0.0 
+        # force very high probas and +inf to 1.0
+        probas[probas>1-1e-5] = 1.0
+        # if the error is larger than 0.1 then force the probability to sum to one with a warning
+        if abs(1.0 - probas.sum())>0.1: 
+            print(f"[WARN] The probabilities of the states of {self.name} do not sum to 1.0. \
+            The sum of the probabilities computed from weight {z.tolist()} = {probas.sum()}.\
+            The probabilities are being forced to sum to 1.")
+            probas = probas/probas.sum()
+        else:  # adjust minor rounding errors 
+            probas = probas/probas.sum()
 
-            return probas
-        
-        return act_fn
+        return probas
         
     def set_weights(self, weights):
         # if weights are directly provided then just set them
@@ -96,11 +96,7 @@ with n={self.k} states {self.states} and weights {self.weights}")
         return self
         
     def sample(self):
-        # if weights are not set at all then set them to be uniform before computing the probas
-        if self.weights.sum()==0: 
-            probas=None # sample from a uniform distribution
-        else:
-            probas = self.act(self.weights)
+        probas = self._get_probas()
         sample = np.random.choice(self.states, p=probas).item()
         self.last_sample = sample
         return sample
@@ -108,6 +104,21 @@ with n={self.k} states {self.states} and weights {self.weights}")
     def reset_weights(self):
         self.weights = np.zeros(self.k)
         self.last_sample = None
+
+    def _get_probas(self):
+        # if weights are not set at all then set them to be uniform before computing the probas
+        if self.weights.sum()==0: 
+            probas = np.full(self.k, 1/self.k) # sample from a uniform distribution
+        else:
+            # apply basis func (like GAMs) to the weights only if provided
+            if self._basis_fn is None:
+                z = self.weight
+            else:
+                z = np.vectorize(self._basis_fn)(self.weights)
+
+            probas = self._apply_link_safely(z)
+
+        return probas
         
 #     def _smooth_weights(self): 
 #         """Smooths the self.weights numpy array by taking the 
@@ -384,7 +395,7 @@ that has no defined rules in the config file.")
                     k = list(range(node.k))
                     df_temp.loc[k, node_name] = node.states
                     # normalize weights to get p-distribution 
-                    node_probas = node.act(node.weights)*100 
+                    node_probas = node._get_probas()*100 
                     # print('[D] final:', np.array(node_probas).astype(int).tolist())
                     df_temp.loc[k, f"{node_name}_probas"] = node_probas
                     
@@ -596,7 +607,7 @@ that has no defined rules in the config file.")
                 # also store the probability of the states of the genvars and the covars
                 all_vars = list(self.GENVARS.items()) + list(self.COVARS.items())
                 for k,v in all_vars:
-                    self.df.at[f'{subID:05}', f'probas_{k}'] = v.act(v.weights).round(2).tolist()
+                    self.df.at[f'{subID:05}', f'probas_{k}'] = v._get_probas().round(2).tolist()
         
         # create the output folder and save the table
         # add sample size to output dir name and create the folders
