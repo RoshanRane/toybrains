@@ -16,7 +16,7 @@ if os.path.abspath('../../') not in sys.path:
 
 from create_toybrains import ToyBrainsData
 from utils.vizutils import *
-from utils.configutils import *
+from toybrains.utils.genutils import *
 import argparse
 
 
