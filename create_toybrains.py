@@ -39,7 +39,7 @@ class PROB_VAR:
     '''Class to init a probabilistic variable that has states with a probability 
      distribution which can be modified and sampled from'''
     def __init__(self, name, states, 
-                link_fn=softmax, basis_fn=lambda z: math.log(z) if z!=0 else 0): # avoid log(0)
+                link_fn=softmax, basis_fn=lambda z: z): # alternative is log lambda z: math.log(z) if z!=0 else 0
         # link function set to the logistic function by default
         # for other options refer to https://www.statsmodels.org/stable/glm.html#link-functions
         self.name = name
@@ -781,7 +781,7 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
 using self.generate_dataset_table() method or load an already generated dataset using \
 self.load_generated_dataset()"  
         for metric in metrics:
-            assert metric in list(sklearn.metrics.get_scorer_names()) + self.my_custom_scorers, f"metric_name '{metric}' is invalid.\
+            assert metric in list(sklearn.metrics.get_scorer_names()) + self.my_custom_scorers or ('logodds' in metric), f"metric_name '{metric}' is invalid.\
     It should be one of the sklearn.metrics.get_scorer_names()"
         
         start_time = datetime.now()

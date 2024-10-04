@@ -17,7 +17,7 @@ from scipy.special import logit
 # import shap
 
 # add custom imports
-from utils.metrics import d2, r2_logodds, r2_odds, loglikelihood_ratio
+from utils.metrics import d2, logodds_metric, loglikelihood_ratio
 
 def check_if_continuous(states):
     '''Check if the states of the label are continuous or not'''
@@ -168,16 +168,20 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     # print(f"[D] X_cols = {X_cols} train_X.shape = {train_X.shape}")
     clf.fit(train_X, train_y)
     
+    # Store the y_pred_probas[:,1] and the the y_true for using other metrics in the future
+    y_pred_probas = clf.predict_proba(test_X)
+    results.update({"y_pred_probas_test": y_pred_probas[:,-1].tolist(),
+                    "y_true_test": test_y.tolist()})
+                    
     # estimate all requested metrics using the best model   
     for metric_name in metrics:
         # if classification then use d2_metric_probas instead of r2
         metric_kwargs = {}
         if metric_name.lower() == "d2" and not regression_task:     
             metric_fn = make_scorer(d2, response_method="predict_proba")
-        elif metric_name.lower() == "r2_logodds" and not regression_task:
-            metric_fn = make_scorer(r2_logodds, response_method="predict_proba")
-        elif metric_name.lower() == "r2_odds" and not regression_task:
-            metric_fn = make_scorer(r2_odds, response_method="predict_proba")
+        elif "logodds" in metric_name.lower() and not regression_task:
+            metric_type = metric_name.split("_")[-1]
+            metric_fn = make_scorer(logodds_metric, response_method="predict_proba", metric=metric_type)
         elif metric_name.lower() == "loglikelihood_ratio" and not regression_task:
             metric_fn = make_scorer(loglikelihood_ratio, response_method="predict_proba")
         else:
@@ -197,6 +201,14 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
 
                 results.update({f"score_holdout_{holdout_name}_{metric_name}": 
                                 metric_fn(clf, holdout_X, holdout_y)})
+                
+                # Store the y_pred_probas[:1] and the the y_true for calculating other metrics in the future
+                y_pred_probas = clf.predict_proba(holdout_X)
+                results.update({f"y_pred_probas_holdout_{holdout_name}": y_pred_probas[:,-1].tolist(),
+                                f"y_true_holdout_{holdout_name}": holdout_y.tolist()})
+                
+    
+    
 
     # SHAP explanations
     # shap_contrib_scores = None
@@ -259,4 +271,5 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
 #         results.update({"shap_contrib_scores": shap_contrib_scores})
 
     settings = {"model":model_name, "model_params":model_params,  "model_config":model}
+
     return results, settings

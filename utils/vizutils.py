@@ -188,6 +188,7 @@ def plot_col_dists(df, attr_cols, cov_cols, title=''):
 def show_contrib_table(dfs_results, 
                        avg_over_trials=True,
                        filter_rows={}, filter_cols=[], 
+                       percentages=True, 
                        color=None):
     '''reorganize the generated baseline results and display it as a pretty table with style:
     average the results across trials after grouping by ['dataset','out', 'inp']'''
@@ -224,9 +225,10 @@ def show_contrib_table(dfs_results,
     desc = dfs[grp_by+filter_cols].groupby(grp_by).mean()
 
     # format to percentages
-    func = lambda s: int(s*100) if pd.notnull(s) else -1
-    desc = desc.map(func)
-    print("All results are shown in percentage (%)")
+    if percentages:
+        func = lambda s: int(s*100) if pd.notnull(s) else -1
+        desc = desc.map(func)
+        print("All scores are converted to percentages (%)")
 
     return desc.style.bar(vmin=0, vmax=100, color=color) 
 
