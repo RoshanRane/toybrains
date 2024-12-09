@@ -747,7 +747,7 @@ that has no defined rules in the config file.")
                             output_labels_prefix=["lbl", "cov"],
                             model_name="LR", model_params={},
                             conf_ctrl={},
-                            metrics=["r2", "balanced_accuracy", "roc_auc"],
+                            metrics=["r2", "balanced-accuracy", "roc-auc"],
                             holdout_data=None,
                             # compute_shap=False,
                             outer_CV=5, n_jobs=-1, 
@@ -781,9 +781,8 @@ Fits [input features] X [output labels] X [model x cross validation folds] model
 using self.generate_dataset_table() method or load an already generated dataset using \
 self.load_generated_dataset()"  
         for metric in metrics:
-            assert metric in list(sklearn.metrics.get_scorer_names()) + self.my_custom_scorers or ('logodds' in metric), f"metric_name '{metric}' is invalid.\
+            assert metric in (list(sklearn.metrics.get_scorer_names()) + self.my_custom_scorers) or ('logodds' in metric), f"metric_name '{metric}' is invalid.\
     It should be one of the sklearn.metrics.get_scorer_names()"
-        
         start_time = datetime.now()
 
         # load the dataset csv tables
@@ -841,7 +840,7 @@ self.load_generated_dataset()"
                 # apply a confound control methods if requested
                 for conf_ctrl_method, conf_cols in conf_ctrl.items():
                     # only select the input features and the label in the data table
-                    data_columns = fea_cols + [lbl] + conf_cols
+                    data_columns = fea_cols + [lbl, f'probas_{lbl}'] + conf_cols
                     df_data_i = df_data[data_columns]
 
                     # create 'outer_CV' number of dataset categorization into training, and test sets

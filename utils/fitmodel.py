@@ -165,13 +165,28 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     
     # Train and fit the model
     clf = make_pipeline(preprocessor, model)
-    # print(f"[D] X_cols = {X_cols} train_X.shape = {train_X.shape}")
     clf.fit(train_X, train_y)
     
     # Store the y_pred_probas[:,1] and the the y_true for using other metrics in the future
     y_pred_probas = clf.predict_proba(test_X)
+
     results.update({"y_pred_probas_test": y_pred_probas[:,-1].tolist(),
-                    "y_true_test": test_y.tolist()})
+                    "y_true_test": test_y.tolist(),
+                    "y_true_probas_test": df_test[f'probas_{y_col}'].tolist(), 
+                    "test_idx": df_test.index.tolist()
+                    })
+                    
+    # also save the model coefficients if available
+    if hasattr(clf[-1], 'coef_'):
+        preprocessing, best_model = clf[:-1], clf[-1]
+        coefs = best_model.coef_.squeeze().tolist()
+        # transform the existing feature_names to include the one-hot encoded features
+        new_feature_names = preprocessing.get_feature_names_out(X_cols)
+        # remove preprocessor names from feature names
+        new_feature_names = [name.split("__")[-1] for name in new_feature_names]
+        assert len(new_feature_names)==len(coefs), f"Number of features ({len(new_feature_names)}) \
+and coefficients ({len(coefs)}) do not match after one-hot encoding"
+        results.update({"model_coefs": [(fea_name, coef) for fea_name, coef in zip(new_feature_names, coefs)]})
                     
     # estimate all requested metrics using the best model   
     for metric_name in metrics:
@@ -187,8 +202,8 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
         else:
             metric_fn = get_scorer(metric_name)
         
-        results.update({f"score_train_{metric_name}": metric_fn(clf, train_X, train_y),
-                        f"score_test_{metric_name}": metric_fn(clf, test_X, test_y)})
+        results.update({f"score_train_{metric_name.replace('_', '-')}": metric_fn(clf, train_X, train_y),
+                        f"score_test_{metric_name.replace('_', '-')}": metric_fn(clf, test_X, test_y)})
         
         # if an additional holdout dataset is provided then also estimate the score on it
         if holdout_data is not None and len(holdout_data)>0:
@@ -199,15 +214,15 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
                     holdout_y = holdout_y.astype('category')
                     holdout_y = holdout_y.cat.codes
 
-                results.update({f"score_holdout_{holdout_name}_{metric_name}": 
+                results.update({f"score_holdout_{holdout_name.replace('_', '-')}_{metric_name.replace('_', '-')}": 
                                 metric_fn(clf, holdout_X, holdout_y)})
                 
                 # Store the y_pred_probas[:1] and the the y_true for calculating other metrics in the future
                 y_pred_probas = clf.predict_proba(holdout_X)
-                results.update({f"y_pred_probas_holdout_{holdout_name}": y_pred_probas[:,-1].tolist(),
-                                f"y_true_holdout_{holdout_name}": holdout_y.tolist()})
+                results.update({f"y_pred_probas_holdout_{holdout_name.replace('_', '-')}": y_pred_probas[:,-1].tolist(),
+                                f"y_true_holdout_{holdout_name.replace('_', '-')}": holdout_y.tolist(),
+                                f"y_true_probas_holdout_{holdout_name.replace('_', '-')}": holdout_data_i[f'probas_{y_col}'].tolist()})
                 
-    
     
 
     # SHAP explanations
