@@ -1,15 +1,30 @@
-# [Toy Brains Dataset](https://github.com/RoshanRane/toybrains) 
+# Synthetic dataset: [Toybrains](https://github.com/RoshanRane/toybrains) 
 
-The code can be used to generate a toy dataset of images (64 x 64 pixels) that roughly resemble 2D brain MRI slice.
-The different attributes of the generated 2D images can be easily controlled and modified with any self-defined `labels` and `covariates` or confounders.  
-The generated synthetic data can be used to quickly test and compare different confound-control methods analysis, or casuality analysis, and image-based prediction models such as deep learning architectures.
+## Introduction
+![Figure 1: Toybrains](docs/figures/toybrains.png)_Figure 1: Examples of the 2D synthetic images generated with Toybrains_
 
-- The synthetic dataset can be generated using the [create_shapes_data.py](create_toybrains.py) script.
-- The [How-to-use](docs/How-to-use.ipynb) notebook walks you through how one can create toybrain datasets and modify the relationship between the image generation attributes and any custom label or covariate.
-- The [viz_gen_data_dists](viz_data_dists.ipynb) notebook shows how to quickly see the distribution of the generated data and what are the effects of the labels and covariates on the generated images. `inprogress`
+Toybrains is a synthetic dataset of 2D images (see Figure 1) for training machine learning (ML) models for computer vision applications and intended for developing new mechanistic xAI (explainable AI) methods. The images have 64 x 64 pixels with 3 color channels and are loosely inspired by 2D brain MRI slices. The image have 16 tunable visual attributes such as the volume of different shapes, brightness, color, etc, as shown in Figure 2.
+![Figure 2: Image attributes](docs/figures/toybrains_attributes.png)_Figure 2: How to tune and modify the different visual attributes of toybrain images_
 
-## Covariates and labels:
-![Illustration of the dataset](docs/toybrains_illustration.png)
+The main strength of Toybrains over other existing synthetic image datasets, is the ability to define a causal generative graph that define how the distribution of the attributes would vary with respect to a output label, or other tertiary covariates, such as confounders or mediators. 
+![Figure 3: Image attributes](docs/figures/toybrains_causal.png)_Figure 3: Causal generative graph defines how the different visual attributes are influenced by the labels and other covariates, such as confounders_
 
-## Image attributes:
-![Modifying different attributes of the image](docs/toybrains.png)
+Toybrains dataset provides a causal test bench with a **mathematically validated ground truth** to evaluate mechanistic xAI methods (refer to the [formal definition and proof page](docs/figures/formal_definition_and_proof.md)). Therefore with toybrains, ML researchers can create several dataset variations with different causal generative mechanisms and use this to validate the mechanistic xAI methods. 
+
+
+## Getting started
+
+1. Install the python package dependancies: Navigate into the directory of the repository. Then create a new enviroment called 'toy' using mamba (recommended) or conda and install all the dependencies.
+```
+mamba env create -f environment.yml
+mamba activate toy
+```
+1. Go through the tutorials in the `tutorials` folder to create your first toybrains dataset. The master script for generating the dataset is `create_toybrains.py`.
+
+
+<!-- ## Appendix
+#### A1: Why are causal XAI methods important?
+TODO
+Causal XAI methods explain ML/DL model decisions in causal terms. That is, they detect whether a variable $c_k$ effects the model predictions $\hat{y}$ as a confounders, or a mediators and measures the effect of $c_k$ on generating $\hat{y}$. When DL models are used in scientific discovery (such as for brain-behaviour discovery using brain MRI), understanding the DL model decisions from a causal perspective becomes foremost important. -->
+
+
