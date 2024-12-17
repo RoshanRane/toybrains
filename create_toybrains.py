@@ -30,7 +30,7 @@ from utils.fitmodel import fitmodel
 from utils.confounds import CounterBalance
 import utils.metrics
 # from utils.vizutils import plot_col_dists
-import graphviz
+import pygraphviz
 # from causalgraphicalmodels import CausalGraphicalModel # Does not work with python 3.10
 
 #################################  Helper functions  ###############################################
@@ -58,7 +58,7 @@ class PROB_VAR:
         probas[probas>1-1e-5] = 1.0
         # if the error is larger than 0.1 then force the probability to sum to one with a warning
         if abs(1.0 - probas.sum())>0.1: 
-            print(f"[WARN] The probabilities of the states of {self.name} do not sum to 1.0. \
+            print(f"[PROB_VAR][variable {self.name}] The probabilities of the states of {self.name} do not sum to 1.0. \
             The sum of the probabilities computed from weight {z.tolist()} = {probas.sum()}.\
             The probabilities are being forced to sum to 1.")
             probas = probas/probas.sum()
@@ -69,7 +69,7 @@ class PROB_VAR:
         
     def set_weights(self, weights):
         # if weights are directly provided then just set them
-        assert len(weights)==self.k, f"provided len(weights={weights}) are not equal to configured len(states={self.states})."
+        assert len(weights)==self.k, f"[PROB_VAR][variable {self.name}] provided len(weights={weights}) are not equal to configured len(states={self.states})."
         self.weights = np.array(weights)
         
 
@@ -82,13 +82,13 @@ class PROB_VAR:
             idxs = [idxs]
         if isinstance(amt, (int,float)):
             amt = [amt]*len(idxs)
-        assert len(amt)==self.k, f"len(amt={amt}) are not equal to len(states={self.states})"
+        assert len(amt)==self.k, f"[PROB_VAR][variable {self.name}] The len(amt={amt}) are not equal to len(states={self.states})"
 
         for i,idx in enumerate(idxs):
             try:
                 self.weights[idx] += amt[i]
             except IndexError as e:
-                print(f"\n[IndexError] index={idx} is out-of-bound for variable '{self.name}' \
+                print(f"\n[PROB_VAR][variable {self.name}] index={idx} is out-of-bound for variable '{self.name}' \
 with n={self.k} states {self.states} and weights {self.weights}")
                 raise e
         # self._smooth_weights()
@@ -119,6 +119,9 @@ with n={self.k} states {self.states} and weights {self.weights}")
             probas = self._apply_link_safely(z)
 
         return probas
+
+    def __repr__(self):
+        return f"PROB_VAR(name={self.name}, states={self.states}, weights={self.weights})"
         
 #     def _smooth_weights(self): 
 #         """Smooths the self.weights numpy array by taking the 
@@ -154,13 +157,11 @@ class ToyBrainsData:
                  config=None, 
                  out_dir="dataset/", 
                  img_size=64, seed=None, 
-                 verbose=0,
-                 save_probas=False):
+                 verbose=0):
         
         self.I = img_size
         self.OUT_DIR = out_dir
         self.verbose = verbose
-        self.save_probas = save_probas
         # forcefully set a random seed
         if self.verbose>2: seed = 42
         
@@ -196,7 +197,7 @@ class ToyBrainsData:
     def _init_df(self):
         # Initialize a table to store all dataset attributes
         columns = sorted(list(self.COVARS.keys())) + sorted(list(self.GENVARS.keys()))
-        if self.save_probas: columns += [f'probas_{var}' for var in columns]                
+        columns += [f'probas_{var}' for var in columns]                
         self.df =  pd.DataFrame(columns=columns)
         self.df.index.name = "subjectID"  
     
@@ -257,8 +258,8 @@ and it is not a generative attribute either."
                 if isinstance(cov_rule, tuple):
                     if cov_state in cov_rule:
                         return rules[cov_rule]
-                    else:
-                        raise ValueError(f"[ERROR] The covariate {cov_name} has a state {cov_state} \
+            # didn't find any rule for the cov_state then return Config error
+            raise ValueError(f"[CONFIG file Sanity check][ERROR] The covariate {cov_name} has a state {cov_state} \
 that has no defined rules in the config file.")
             
     def _adjust_covar_dists_and_sample(self, fix_covar={}):
@@ -391,7 +392,10 @@ that has no defined rules in the config file.")
                         self._adjust_covar_dists_and_sample(fix_covar=fix_covar)
                         # print('[D] update dst_node in covar:', np.array(self.COVARS[node_name].weights).round(2).tolist())
                         node = self.COVARS[node_name]
-                        
+                    else:
+                        raise ValueError(f"[CONFIG file Sanity check] The node '{node_name}' is neither defined as \
+a covariate in COVAR, nor is a predifined generative attribute (GENVAR).")
+                    
                     k = list(range(node.k))
                     df_temp.loc[k, node_name] = node.states
                     # normalize weights to get p-distribution 
@@ -463,7 +467,7 @@ that has no defined rules in the config file.")
 
     def draw_dag(self):
         """dot file representation of the Causal Graphical Model (CGM)."""
-        dot = graphviz.Digraph(graph_attr={'rankdir': ''})
+        dot = pygraphviz.AGraph(strict=False, directed=True, graph_attr={'rankdir': ''})
         # separate out the source nodes from the destination nodes
         src_nodes, dst_nodes = zip(*self.CGM_edges)
         src_nodes = sorted(list(set(src_nodes)))
@@ -492,7 +496,7 @@ that has no defined rules in the config file.")
                         "style":"filled", "fillcolor": get_color_hex(grp), 
                         # "color":color_hex,"penwidth":"2"
                         }
-            dot.node(node, node, settings)
+            dot.add_node(node, **settings)
             
         # add destination nodes
         for grp in dst_grps:
@@ -506,23 +510,22 @@ that has no defined rules in the config file.")
                         } 
             
             with dot.subgraph(name=f'cluster_dst') as dot_dst:
-                dot_dst.attr(rank="dst", style="invis")
+                dot_dst.graph_attr.update(rank="dst", style="invis")
                 with dot_dst.subgraph(name=f'cluster_dst_{grp}') as dot_c:
-                    dot_c.attr(label=grp, labelloc='b', style="dashed")
+                    dot_c.graph_attr.update(labelloc='b', style="dashed")
                     for node in dst_nodes:
                         if node.split("_")[0] == grp:
-                            dot_c.node(node, "_".join(node.split("_")[1:]), **settings)
+                            dot_c.add_node(node, **settings)
             
         for a, b in self.CGM_edges:
             # set the arrow color same as the color of the attrib variable
             grp = b.split("_")[0]
-            dot.edge(a, b, _attributes={"color": get_color_hex(grp, alpha=200), 
+            dot.add_edge(a, b, _attributes={"color": get_color_hex(grp, alpha=200), 
                                         "style":"bold",
                                         # "penwidth":"2",
                                         "arrowhead":"vee"})
-
-        return dot
-        
+        # return the dot object as a figure to be displayed
+        return dot.draw(format='png', prog='dot')        
 ##########################################  methods for GENERATING DATASET    #######################################################
 #####################################################################################################################################
 
@@ -603,11 +606,10 @@ that has no defined rules in the config file.")
             for k,v in genvars.items():
                 self.df.at[f'{subID:05}', k] = v
 
-            if self.save_probas:
-                # also store the probability of the states of the genvars and the covars
-                all_vars = list(self.GENVARS.items()) + list(self.COVARS.items())
-                for k,v in all_vars:
-                    self.df.at[f'{subID:05}', f'probas_{k}'] = v._get_probas().round(2).tolist()
+            # also store the probability of the states of the genvars and the covars
+            all_vars = list(self.GENVARS.items()) + list(self.COVARS.items())
+            for k,v in all_vars:
+                self.df.at[f'{subID:05}', f'probas_{k}'] = v._get_probas().round(2).tolist()
         
         # create the output folder and save the table
         # add sample size to output dir name and create the folders
@@ -747,7 +749,7 @@ that has no defined rules in the config file.")
                             output_labels_prefix=["lbl", "cov"],
                             model_name="LR", model_params={},
                             conf_ctrl={},
-                            metrics=["r2", "balanced-accuracy", "roc-auc"],
+                            metrics=["r2", "balanced_accuracy", "roc_auc"],
                             holdout_data=None,
                             # compute_shap=False,
                             outer_CV=5, n_jobs=-1, 
@@ -827,6 +829,7 @@ self.load_generated_dataset()"
             # get the respective list of input feature columns for each feature_type 
             for fea_name, fea_cols in self._get_feature_cols(input_feature_sets, 
                                                              lbl=lbl).items():
+                if len(fea_cols)==0 or (len(fea_cols)==1 and lbl==fea_cols[0]): continue
                 # if input is images append the loaded image pixel arrays to the dataframe
                 if fea_name == "images":
                     df_data = df_data.join(fea_cols['traintest']) # fea_cols is a dict {split: dataframe, ..}
@@ -1055,8 +1058,8 @@ Data changed size from {data.shape} to {new_data.shape}.")
         if len(model_params)==0: 
             return "default"
         else:
-            model_parems_str = "_".join([f"{k}-{v}" for k,v in model_params.items()])
-            return slugify(model_parems_str)
+            model_params_str = "_".join([f"{k}-{v}" for k,v in model_params.items()])
+            return slugify(model_params_str)
 
 
     def _get_feature_cols(self, feature_types, lbl=''):

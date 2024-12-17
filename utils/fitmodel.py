@@ -85,11 +85,15 @@ def fitmodel(df_train, df_test,
         regression_task = check_if_continuous(train_y.unique())
 
     if model_name.upper() == 'LR':
-        if regression_task:
-            if 'l1_ratio' not in model_params: model_params.update(dict(l1_ratio=0))
-            if 'alpha' not in model_params: model_params.update(dict(alpha=1.0))
+        if regression_task: # use ElasticNet for regression and change model_params accordingly
+            model_params_reg = dict(l1_ratio=0) # l2 by default
+            # replace 'penalty' with 'l1_ratio' for ElasticNet
+            if 'penalty' in model_params and model_params['penalty']=='l1':
+                    model_params_reg.update(dict(l1_ratio=1))
+            # replace 'C' with 'alpha' for ElasticNet
+            if 'C' in model_params: model_params_reg.update(dict(alpha=1.0/model_params['C']))
             model = ElasticNet(random_state=random_seed,
-                                **model_params)
+                                **model_params_reg)
         else:
             # if no model_params are explicitly provided then default to rbf kernel 
             if 'penalty' not in model_params: model_params.update(dict(penalty='l2'))
@@ -168,9 +172,13 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     clf.fit(train_X, train_y)
     
     # Store the y_pred_probas[:,1] and the the y_true for using other metrics in the future
-    y_pred_probas = clf.predict_proba(test_X)
+    if not regression_task:
+        y_pred_probas = clf.predict_proba(test_X)
+        y_pred_probas = y_pred_probas[:,-1]
+    else:
+        y_pred_probas = clf.predict(test_X)
 
-    results.update({"y_pred_probas_test": y_pred_probas[:,-1].tolist(),
+    results.update({"y_pred_probas_test": y_pred_probas.tolist(),
                     "y_true_test": test_y.tolist(),
                     "y_true_probas_test": df_test[f'probas_{y_col}'].tolist(), 
                     "test_idx": df_test.index.tolist()
@@ -179,7 +187,8 @@ Currently supported models are ['LR', 'SVM', 'RF', 'MLP']")
     # also save the model coefficients if available
     if hasattr(clf[-1], 'coef_'):
         preprocessing, best_model = clf[:-1], clf[-1]
-        coefs = best_model.coef_.squeeze().tolist()
+        coefs = best_model.coef_
+        if coefs.ndim>1: coefs = coefs[0]
         # transform the existing feature_names to include the one-hot encoded features
         new_feature_names = preprocessing.get_feature_names_out(X_cols)
         # remove preprocessor names from feature names
@@ -192,7 +201,9 @@ and coefficients ({len(coefs)}) do not match after one-hot encoding"
     for metric_name in metrics:
         # if classification then use d2_metric_probas instead of r2
         metric_kwargs = {}
-        if metric_name.lower() == "d2" and not regression_task:     
+        if regression_task:
+            metric_fn = get_scorer('r2') # [HACK] r2 is the fixed metric for regression
+        elif metric_name.lower() == "d2" and not regression_task:     
             metric_fn = make_scorer(d2, response_method="predict_proba")
         elif "logodds" in metric_name.lower() and not regression_task:
             metric_type = metric_name.split("_")[-1]
@@ -218,7 +229,11 @@ and coefficients ({len(coefs)}) do not match after one-hot encoding"
                                 metric_fn(clf, holdout_X, holdout_y)})
                 
                 # Store the y_pred_probas[:1] and the the y_true for calculating other metrics in the future
-                y_pred_probas = clf.predict_proba(holdout_X)
+                if not regression_task:
+                    y_pred_probas = clf.predict_proba(holdout_X)
+                    y_pred_probas = y_pred_probas[:,-1]
+                else:
+                    y_pred_probas = clf.predict(holdout_X)
                 results.update({f"y_pred_probas_holdout_{holdout_name.replace('_', '-')}": y_pred_probas[:,-1].tolist(),
                                 f"y_true_holdout_{holdout_name.replace('_', '-')}": holdout_y.tolist(),
                                 f"y_true_probas_holdout_{holdout_name.replace('_', '-')}": holdout_data_i[f'probas_{y_col}'].tolist()})

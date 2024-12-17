@@ -17,5 +17,5 @@ dependencies:
   - colordict
   - tabulate
   - scikit-image
-  - graphviz
-  - slugify
+  - pygraphviz
+  - python-slugify

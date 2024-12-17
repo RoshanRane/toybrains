@@ -47,6 +47,8 @@ def plot_col_counts(df, title=''):
     plottypes = {}
     
     for col in cols:
+        # don't plot the probas columns
+        if col.startswith('probas_'): continue 
         if df_copy[col].nunique()==2:
             plottypes.update({col:'pie'})
         elif pd.api.types.is_numeric_dtype(df_copy[col]):
@@ -71,7 +73,7 @@ def plot_col_counts(df, title=''):
     if subplot_overflows!=0: subplot_nrows+=1
     # create subplots set attributes
     f,axes = plt.subplots(subplot_nrows, subplot_ncols, 
-                          figsize=(1+2*subplot_ncols,1+1*subplot_nrows))
+                          figsize=(1+2*subplot_ncols,1+2*subplot_nrows))
     axes = axes.ravel() if not isinstance(axes, matplotlib.axes.Axes) else [axes]
     if title: f.suptitle(title, fontsize=fs+2)
     # f.supylabel("Count", fontsize=fs)
@@ -90,7 +92,7 @@ def plot_col_counts(df, title=''):
             # check if the attribute represents colors then use the same color names for the bar plot
             if isinstance(df_copy[col].iloc[0], str) and is_color_like(df_copy[col].iloc[0].split('-')[-1]):
                 sns.countplot(data=df_copy, x=col, ax=ax, 
-                             order=df_copy[col].unique().sort_values())
+                             order=sorted(df_copy[col].unique()))
             else:
                 sns.countplot(data=df_copy, x=col, ax=ax)
             # format the xtick labels 
@@ -116,7 +118,10 @@ def plot_col_counts(df, title=''):
     
 def plot_col_dists(df, attr_cols, cov_cols, title=''):
     
-    df = df.copy()
+    # drop columns with 'probas_' prefix
+    df = df.copy().drop(columns=[c for c in df.columns if c.startswith('probas_')])
+    attr_cols = [c for c in attr_cols if c in df.columns]
+    cov_cols = [c for c in cov_cols if c in df.columns]
     # subsample a max of 1000 samples to speed up the planning
     if len(df)>1000: df = df.sample(1000)
 
@@ -323,6 +328,34 @@ def viz_contribs_shap(df_results, top_n=4,
     return plot_df
 
 
+
+def viz_contribs_univariate(df):
+    df_plt = df.reset_index()
+    # rename input to X and output to y & create a new column X=>y for the plot 
+    df_plt = df_plt.rename(columns={'inp': 'Input $X$', 'out': 'Output'})
+    # replace attr_ with '$L_{}$', cov_ with '$C_{}$', lbl_ with '$y_{}$' in input & outputs 
+    df_plt['Input $X$'] = df_plt['Input $X$'].str.replace('_', '-').str.replace('attr-', '$L_{').str.replace('lbl-', '$y_{').str.replace('cov-', '$C_{').add('}$') 
+    df_plt['Output'] = df_plt['Output'].str.replace('_', '-').str.replace('lbl-', '$y_{').str.replace('cov-', '$C_{').add('}$')   
+    df_plt['$f: X \\Rightarrow y$'] = df_plt.apply(lambda row: f"{row['Input $X$']} $\\Rightarrow$ {row['Output']}", axis=1)
+    # create a column with info about dataset and model
+    df_plt['Dataset & Model'] = df_plt.apply(lambda row:  f"{os.path.basename(row['dataset']).replace('toybrains_', '')} Model({row['model']})", axis=1)
+
+    sns.set(style="darkgrid")
+    g = sns.catplot(data=df_plt, kind='bar', 
+                    x='score_test_balanced-accuracy', 
+                    y='$f: X \\Rightarrow y$', 
+                    hue='Input $X$', col='Dataset & Model', 
+                    errorbar='ci',
+                    aspect=1.5, height=3+0.1*len(df_plt['$f: X \\Rightarrow y$'].unique()))
+
+    for ax in g.axes.flat:
+        ax.set_xlabel('Balanced Accuracy')
+        ax.set_xlim(0.0, 1)
+        ax.axvline(0.5, color='grey', lw=0.5, linestyle='--') 
+
+    return g
+
+
 #############################################   Backend   #############################################
 def viz_rep_metrics(metrics_scores, title=''):
     n_cols = 3
@@ -386,157 +419,3 @@ def load_results_from_logdir(logsdir,
     #     shortname = logsdir_folder if 'deeprepvizlog' not in logsdir_folder else logsdir
     deeprepvizlogs.update({logsdir: deeprepvizlog})
 
-
-
-
-
-
-
-#################################       lblmidr-consite       #################################
-def viz_contrib_table(data, X_axes=['X->y','c->X','c->y'], 
-                      metric_col='score_test_r2',
-                      show_SHAP=False, err_style='bars',
-                      y_label_suffix=''):
-    for rel in X_axes:
-        assert rel in ['X->y','c->X','c->y'], f"invalid rel {rel}"
-        
-   
-    if isinstance(data, pd.io.formats.style.Styler):
-        data = data.data
-    df = data.copy().reset_index()
-    # shorten the 'dataset' name for the plot labels
-    df['dataset'] = df['dataset'].apply(lambda x: x.split('_')[-1])
-
-    # get the iterations of yX, cX, and cy as separate columns
-    df[['c->y','c->X','X->y']] = df['dataset'].str.split('-', expand=True)
-    for col in ['X->y','c->X','c->y']:
-        # print(col, df[col].values[0])
-        df[col] = df[col].str[-1].astype(int)
-
-    # rename the test_metric column to 'Model pred. contrib score'
-    y=f'Model-based contrib score {y_label_suffix}'
-    df = df.rename(columns={metric_col:y})
-    
-    col = 'inp'
-    col_order = ['attr_all', 'attr_shape-midr_curv, shape-midr_vol-rad', 
-                 'attr_brain-int_fill', 'cov_all'] if 'attr_all' in  df[col].unique() else df[col].unique()
-    if show_SHAP:
-        y = 'SHAP contrib score'
-        col = 'SHAP(attr)'
-        col_order = df.filter(regex='shap__').columns.tolist()
-        # select only the 'inp'=attr_all rows
-        df = df[df['inp']=='attr_all']
-        # stack the SHAP cols into a single column 'SHAP' for compatibility with seaborn relplot
-        df = df.melt(id_vars=['dataset','inp','c->y','c->X','X->y'], 
-                        value_vars=col_order, 
-                    var_name=col, value_name=y)
-    # display(df)
-    for x in X_axes:
-        if x=='X->y':
-            hue='c->X'
-            size='c->y'
-        elif x=='c->X':
-            hue='X->y'
-            size='c->y'
-        elif x=='c->y':
-            hue='X->y'
-            size='c->X'
-        else:
-            assert False, f"invalid col {x}"
-
-        sns.set(style="darkgrid")
-        g = sns.relplot(data=df, kind='line', 
-                x=x,y=y, hue=hue, style=size, size=size,
-                err_style=err_style,
-                # hue='inp', height=30, aspect=0.5,
-                col_wrap=2, col=col, palette='brg_r',
-                col_order=col_order,
-                height=5, aspect=1.5,
-            )
-        # turn on frame of the legend
-        g._legend.set_frame_on(True)
-        # set y lim to 0-100
-        # g.set(ylim=(0, 100))
-        g.fig.suptitle(f"{y} as we iteratively increase {x}", fontsize=20)
-        g.fig.subplots_adjust(top=0.9)
-
-
-def viz_contrib_table_2(df_original, 
-                        metric_name='r2', 
-                        ax=None, cmap=None, title='', 
-                        adjust_xticks=True):
-    
-    def get_yX_cX_cX(dataset_suffixes):
-        cy, cX, yX = zip(*dataset_suffixes)
-        # sanity check the index format
-        assert (cy[0].startswith('cy')) and (cX[0].startswith('cX')) and (yX[0].startswith('yX')), "This plot function expects the  dataset names (df.index)\
-to be of format '*_cyiii-cXjjj-yXkkk' where cy, cX, and yX are the c->y, c->X, and X->y relations respectively,\
-and iii, jjj & kkk are the strength of this relation in percentage ranging in 0-100."
-        cy = np.array([int(i[2:]) for i in cy])
-        cX = np.array([int(i[2:]) for i in cX])
-        yX = np.array([int(i[2:]) for i in yX])
-        return cy, cX, yX
-    
-    df = df_original.copy()
-    fs = 12
-    assert (df.index.name is not None) and (df.index.name.lower() == 'dataset'), f"index of the provided df should be 'dataset' but it is {df.index.name}"
-    # shorten the 'dataset' name for the plot labels to only contain its suffix with cy, cX, yX
-    df.index = df.index.map(lambda x: x.split('_')[-1])
-    # sort the X axis by 100*(X<-y) + 10*(X<-c * c->y)/2 + cX
-    cy, cX, yX = get_yX_cX_cX(df.index.str.split('-', expand=True))
-    sort_order = yX + (cy*cX)/1000 + cX/10000 + cy/1000 
-    df = df.iloc[sort_order.argsort()]
-
-    # plot with seaborn lineplot
-
-    if ax is None: 
-        sns.set_style('ticks')
-        f, ax = plt.subplots(figsize=(25, 8))
-
-    g = sns.lineplot(df, ax=ax, 
-                     dashes=False, markers=True, alpha=0.9, linewidth=2,
-                     palette=cmap)
-
-    # make the plot pretty and readable
-    ax.set_ylabel(f"{metric_name.replace('-', ' ').replace('_',' ').title()}", fontsize=fs)
-    ax.set_xlabel(r'Increasing confound signal [$X \leftarrow c \to y$]'+'\n'+r'   &   True signal  [$X \leftarrow y$] ', fontsize=fs)
-    
-    # on the x-axis ticks show the total X<-y and the total X<-c->y
-    if adjust_xticks:
-        last_Xy = -1
-        cy, cX, yX  = get_yX_cX_cX([xtick.get_text().split('-') for xtick in ax.get_xticklabels()])
-        poses = list(ax.get_xticks())
-        new_xticklabels = []
-        majorticks = []
-        for cy_i, cX_i, yX_i, pos_i in zip(cy, cX, yX, poses):
-            # add a major tick label every time the total_Xy changes
-            if cX_i == 0 and cy_i == 0:
-                majorticks.append(pos_i)
-                new_xtick = f'Xy={yX_i:03d}%      cy={cy_i:03d}%   cX={cX_i:03d}%'
-            else:
-                new_xtick = f'cy={cy_i:03d}%   cX={cX_i:03d}%'
-            new_xticklabels.append(new_xtick)
-        majorticks.append(poses[-1]+2)
-
-        # print(ax.get_xticklabels(), new_xticklabels)       
-        ax.set_xticks(poses, new_xticklabels, rotation=90)
-
-        # vertical lines to show transition of X<-c->y
-        for x_line in majorticks:
-            ax.axvline(x_line-0.9, color='grey', ls='--', lw=1, alpha=0.5)
-            ax.vlines( x_line-0.9, 0, -0.45, color='grey', ls='--', lw=1,
-                    clip_on=False,
-                    transform=ax.get_xaxis_transform())
-    
-        ax.set_xlim(-1, poses[-1]+1)
-    
-    ymin, ymax = ax.get_ylim()
-    y_lines = [y_line for y_line in [0,25,75,100] if ymin<=y_line<=ymax]
-    for y_line in y_lines:
-        ax.axhline(y_line, color='grey', ls='--', lw=0.8, alpha=0.5)
-
-    if title:
-        ax.set_title(title, fontsize=fs+4)
-
-    sns.move_legend(ax, "upper right", bbox_to_anchor=(1.0, 1.15), frameon=True, ncol=3, title='')
-    plt.setp(g.get_legend().get_texts(), fontsize=str(fs+4))  # for legend text
