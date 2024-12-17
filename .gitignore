@@ -1,4 +1,5 @@
 .ipynb_checkpoints/
+**/__pycache__/
 *_checkpoint*
 results/
 **/images/*.jpg
@@ -15,11 +16,12 @@ nohup.out
 *.swp
 experiments/__*.ipynb
 **/configs/**
+**/dataset/con**
 **/_nohup/**
-**/dataset/**
 **/log/**
 .nfs*
-experiments/lblmidr-consite/configs/lblmidr-consite_cy0_cX0_yX0.py
 __*.ipynb
 *.zip
 *.html
+**/run.csv
+**/baseline_results.csv

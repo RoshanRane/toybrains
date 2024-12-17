@@ -230,11 +230,11 @@ and coefficients ({len(coefs)}) do not match after one-hot encoding"
                 
                 # Store the y_pred_probas[:1] and the the y_true for calculating other metrics in the future
                 if not regression_task:
-                    y_pred_probas = clf.predict_proba(holdout_X)
-                    y_pred_probas = y_pred_probas[:,-1]
+                    y_pred_probas_hold = clf.predict_proba(holdout_X)
+                    y_pred_probas_hold = y_pred_probas_hold[:,-1]
                 else:
-                    y_pred_probas = clf.predict(holdout_X)
-                results.update({f"y_pred_probas_holdout_{holdout_name.replace('_', '-')}": y_pred_probas[:,-1].tolist(),
+                    y_pred_probas_hold = clf.predict(holdout_X)
+                results.update({f"y_pred_probas_holdout_{holdout_name.replace('_', '-')}": y_pred_probas_hold.tolist(),
                                 f"y_true_holdout_{holdout_name.replace('_', '-')}": holdout_y.tolist(),
                                 f"y_true_probas_holdout_{holdout_name.replace('_', '-')}": holdout_data_i[f'probas_{y_col}'].tolist()})
                 

@@ -56,7 +56,7 @@ RULES_COV_TO_GEN = {}\n'.format(opt_lists,
 def _gen_toybrains_dataset(
                 split,  
                 config_fname, covars, rules, config_write_kwargs,
-                n_samples, show_dag, show_probas, save_probas,
+                n_samples, show_dag, show_probas, 
                 outdir_suffix, overwrite_existing, gen_images,
                 n_jobs, verbose):
     ## 1) Write the config file
@@ -71,7 +71,7 @@ def _gen_toybrains_dataset(
         write_config_file(config_fname, covars, rules, config_write_kwargs=config_write_kwargs)
 
     ## 2) instantiate the toybrains class
-    toy = ToyBrainsData(config=config_fname, save_probas=save_probas, verbose=verbose)
+    toy = ToyBrainsData(config=config_fname, verbose=verbose)
     # 3) show the generative graph used for sampling
     if show_dag==True:
         print(f"Config file: {config_fname}")
@@ -111,7 +111,7 @@ def gen_toybrains_dataset(config_fname, covars, rules,
                        n_samples=1000, 
                        n_samples_test=0, n_samples_test_ood=0, 
                        lbl_name='lbl_y',
-                       show_probas=None, save_probas=False, show_dag=False, 
+                       show_probas=None, show_dag=False, 
                        return_baseline_results=False,
                        baseline_models=[("LR",{})],  
                        baseline_metrics=["r2", 'balanced_accuracy'], trials=10,
@@ -128,7 +128,7 @@ def gen_toybrains_dataset(config_fname, covars, rules,
     toy = _gen_toybrains_dataset(split, 
                                 config_fname, covars, rules, config_write_kwargs=config_write_kwargs, 
                                 n_samples=n_samples, show_dag=show_dag, 
-                                show_probas=show_probas, save_probas=save_probas,
+                                show_probas=show_probas, 
                                 outdir_suffix=outdir_suffix, 
                                 overwrite_existing=overwrite_existing, 
                                 gen_images=gen_images,
@@ -141,7 +141,7 @@ def gen_toybrains_dataset(config_fname, covars, rules,
                                 config_fname, covars, rules, 
                                 config_write_kwargs={}, 
                                 n_samples=n_samples_test, show_dag=False, 
-                                show_probas=None, save_probas=save_probas,
+                                show_probas=None, 
                                 outdir_suffix=outdir_suffix, 
                                 overwrite_existing=overwrite_existing, 
                                 gen_images=gen_images,
@@ -191,7 +191,7 @@ def gen_toybrains_dataset(config_fname, covars, rules,
             _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
                                     config_write_kwargs={},
                                     n_samples=n_samples_test_ood, show_dag=False, 
-                                    show_probas=None, save_probas=save_probas,
+                                    show_probas=None,
                                     outdir_suffix=outdir_suffix, 
                                     overwrite_existing=overwrite_existing, 
                                     gen_images=gen_images,
