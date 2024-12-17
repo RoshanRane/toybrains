@@ -28,3 +28,25 @@ TODO
 Causal XAI methods explain ML/DL model decisions in causal terms. That is, they detect whether a variable $c_k$ effects the model predictions $\hat{y}$ as a confounders, or a mediators and measures the effect of $c_k$ on generating $\hat{y}$. When DL models are used in scientific discovery (such as for brain-behaviour discovery using brain MRI), understanding the DL model decisions from a causal perspective becomes foremost important. -->
 
 
+## Citation
+If you use this code in your research or project, please consider citing the following:
+([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513))
+BIBTEX:
+```bibtex
+@software{roshanrane_2024_14509513,
+  author       = {RoshanRane and
+                  JiHoon Kim},
+  title        = {RoshanRane/toybrains: First version (test)},
+  month        = dec,
+  year         = 2024,
+  publisher    = {Zenodo},
+  version      = {v1.0.0},
+  doi          = {10.5281/zenodo.14509513},
+  url          = {https://doi.org/10.5281/zenodo.14509513},
+}
+```
+
+APA-style:
+```
+RoshanRane, & JiHoon Kim. (2024). RoshanRane/toybrains: First version (test) (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.14509513
+```
