@@ -30,23 +30,22 @@ Causal XAI methods explain ML/DL model decisions in causal terms. That is, they 
 
 ## Citation
 If you use this code in your research or project, please consider citing the following:
-([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513))
+([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513)) <br>
 BIBTEX:
 ```bibtex
-@software{roshanrane_2024_14509513,
-  author       = {RoshanRane and
-                  JiHoon Kim},
-  title        = {RoshanRane/toybrains: First version (test)},
+@software{roshanrane_toybrains_2024,
+  author       = {RoshanRane,
+                  JiHoon Kim, Kerstin Ritter},
+  title        = {RoshanRane/toybrains},
   month        = dec,
   year         = 2024,
   publisher    = {Zenodo},
-  version      = {v1.0.0},
-  doi          = {10.5281/zenodo.14509513},
-  url          = {https://doi.org/10.5281/zenodo.14509513},
+  doi          = {10.5281/zenodo.14509512},
+  url          = {https://doi.org/10.5281/zenodo.14509512},
 }
 ```
 
 APA-style:
 ```
-RoshanRane, & JiHoon Kim. (2024). RoshanRane/toybrains: First version (test) (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.14509513
+RoshanRane, JiHoon Kim, & Kerstin Ritter. (2024). RoshanRane/toybrains. Zenodo. https://doi.org/10.5281/zenodo.14509512
 ```
