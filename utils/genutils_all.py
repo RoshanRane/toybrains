@@ -7,35 +7,38 @@ from pprint import pprint
 
 #####################################################################################
 
-def make_dataset_name(cons, 
+def make_dataset_name(lat_dir, cons, 
                     cX, cy, Xy, 
                     suffix='',
                     effect_mul=lambda e: e):
-
-    basefilename = f'con{len(cons)}'
+                    
+    basefilename = f"con{len(cons)}_{lat_dir.replace('_','-')}"
     # append the names of the confounders to the file name
     for ci in cons:
         basefilename += "_" + ci.replace('_','-')
-    
     if suffix != '': suffix = '_' + suffix
-
     return f"{basefilename}_cX{int(effect_mul(cX)):03d}_cy{int(effect_mul(cy)):03d}_Xy{int(effect_mul(Xy)):03d}{suffix}"
 
+
 def break_dataset_name(dataset_name, effect_mul=1):
-    # first check if the dataset name already contains the prefixes 'toybrains_n*_': remove them if they exist
+    # check if the dataset name contains the prefixes 'toybrains_n*_'. if yes, remove it first
     if dataset_name.startswith('toybrains_n'):
         parts = dataset_name.split('_')[2:]
     else:
         parts = dataset_name.split('_')
     n_covs = int(parts[0].replace('con',''))
-    cons = parts[1:n_covs+1]
+    ldir = parts[1]
+    ldir = '_'.join(ldir.rsplit('-', 1)) # replace the last '-' with '_' for latents
+    cons = parts[2:2+n_covs]
     cons = [ci.replace('-', '_') for ci in cons]
-    cX = int(parts[n_covs+1].replace('cX',''))/effect_mul
-    cy = int(parts[n_covs+2].replace('cy',''))/effect_mul
-    Xy = int(parts[n_covs+3].replace('Xy',''))/effect_mul
-    suffix = parts[n_covs+4] if len(parts) > n_covs+4 else ''
-    assert n_covs+4 <= len(parts) <= n_covs+5, f"dataset name {dataset_name} has more or less '_' than expected {n_covs+4}"
-    return n_covs, cons, cX, cy, Xy, suffix
+    cX = int(parts[2+n_covs+0].replace('cX',''))/effect_mul
+    cy = int(parts[2+n_covs+1].replace('cy',''))/effect_mul
+    Xy = int(parts[2+n_covs+2].replace('Xy',''))/effect_mul
+    suffix = parts[2+n_covs+3] if len(parts) > 4+n_covs else ''
+    
+    assert n_covs+5 <= len(parts) <= n_covs+6, f"dataset name {dataset_name} has more or less '_' than expected {n_covs+4}"
+    
+    return n_covs, ldir, cons, cX, cy, Xy, suffix
 
 #####################################################################################
 
@@ -71,8 +74,11 @@ def sample_influential_covars(covs, attrs,
                              lat_direct='shape-midr_vol', 
                              verbose=0):    
     
-    assert (n_covs_lbl<=len(covs)) and (n_covs_enc<=n_covs_lbl), "number of covariates influencing the labels should be less than total number of confounders"
+    assert n_covs_lbl <= len(covs) 
+    assert n_covs_enc <= n_covs_lbl 
 
+    if lat_direct is None: lat_direct = np.random.choice(attrs).item()
+    
     # select the n=n_covs_lbl covariates that influence the label y 
     covs_remaining = list(covs.keys())
     covs_lbl = np.random.choice(covs_remaining, 
@@ -106,7 +112,7 @@ is not equal to the number of covs that need to be assigned = {len(covs_attrs)}"
     assert len(covs_to_attrs) + 1 == len(attrs), f"number of covariates assigned to attributes = {n_covs_attrs}\
 +{n_covs_enc}+1 is not equal to the number of attributes = {len(attrs)}"
 
-    return covs_to_attrs, covs_lbl, covs_enc
+    return covs_to_attrs, covs_lbl, covs_enc, lat_direct
 
 #####################################################################################
 #####################################################################################
@@ -151,10 +157,22 @@ def get_rule_for_cov(cov_name, ci_states,
                    effect_size=1,
                    verbose=0):
     # scale the effect size to be between 0 and 100 and inverse of the effect of the p/1+p applied in logistic regression
-    assert 0<=effect_size<=100, f"effect size should be between 0 and 100 so that it can be \
-later adjusted by softmax to an appropriate probability score. Provided effect size = {effect_size}" 
+    assert 0<=effect_size<=5, f"please provide an effect size between 0 and 5 so that it can be \
+later adjusted by function sigmoid(effect_size) to get an appropriate probability score. Provided effect size = {effect_size}" 
+    # get the datatype of the cov by checking ci_states are float or string
+    if isinstance(ci_states[0], (int,float)):
+        ci_type = 'cont'  
+    else:
+        try: # try to convert the states to float 
+            if isinstance(eval(ci_states[0]), (int,float)):
+                ci_type = 'cont' 
+        except: # if the strings dont convert to int or float then they are categorical
+                ci_type = f'cat{len(ci_states)}'
 
-    ci_type = cov_name.split('_')[-1]
+    # covariates have their datatype in their name so do an extra check if this dtype and the infered dtype match
+    assert not cov_name.startswith('cov_') or (
+        ci_type=='cont' and cov_name.endswith('_cont')) or (
+        'cat' in ci_type and '_cat' in cov_name), f"cov_name={cov_name} (states={ci_states}) and ci_type={ci_type} do not match"
 
     # the weights or beta values are computed differently for continuous and categorical covariates 
     weights = []

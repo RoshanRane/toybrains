@@ -13,14 +13,17 @@ from copy import copy, deepcopy
 from tqdm import tqdm
 import argparse
 from datetime import datetime
-import torch.multiprocessing as mp
+import re
 
-from sklearn.model_selection import train_test_split, StratifiedKFold
+
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.preprocessing import LabelEncoder
 
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.multiprocessing as mp
 import torchmetrics
 from torchvision import transforms
 import lightning as L
@@ -28,30 +31,28 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
-import re
-import logging
-# disable some unneccesary lightning warnings
-logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
-logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.WARNING)
 
 # import toybrains library
 # allows users to run this script from anywhere
-TOYBRAINS_DIR = abspath(join(dirname(__file__), '../'))
-if TOYBRAINS_DIR not in sys.path:
-    sys.path.append(TOYBRAINS_DIR)
+TOYBRAINS_DIR = abspath(join(dirname(__file__), '../../../toybrains/'))
+if TOYBRAINS_DIR not in sys.path: sys.path.append(TOYBRAINS_DIR)
 from utils.DLutils import *
 from utils.multiprocess import *
+
+# disable some unneccesary lightning warnings
+import logging
+logging.getLogger("lightning.pytorch.utilities.rank_zero").setLevel(logging.WARNING)
+logging.getLogger("lightning.pytorch.accelerators.cuda").setLevel(logging.WARNING)
 
 # set GPU settings
 torch.set_float32_matmul_precision('medium')
 os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 # os.environ["TF_ENABLE_ONEDNN_OPTS"]="0"
 
-DEEPREPVIZ_REPO = abspath(join(dirname(__file__), "../../Deep-confound-control-v2/")) 
+DEEPREPVIZ_REPO = abspath(join(dirname(__file__), "../../../Deep-confound-control-v2/")) 
 # check that DeepRepViz repo is available and import it
 assert os.path.isdir(DEEPREPVIZ_REPO) and os.path.exists(DEEPREPVIZ_REPO+'/DeepRepViz.py'), f"No DeepRepViz repository found in {DEEPREPVIZ_REPO}. Download the repo from https://github.com/ritterlab/Deep-confound-control-v2 and add its relative path to 'DEEPREPVIZ_REPO'."
-if DEEPREPVIZ_REPO not in sys.path:
-    sys.path.append(DEEPREPVIZ_REPO)
+if DEEPREPVIZ_REPO not in sys.path: sys.path.append(DEEPREPVIZ_REPO)
 from DeepRepViz import DeepRepViz
 
 
@@ -196,16 +197,15 @@ def fit_DL_model(dataset_path, label_col,
     
     df_train = datasplit_df[datasplit_df[split_col]=='train']    
     df_val = datasplit_df[datasplit_df[split_col]=='val']
-    df_test = datasplit_df[datasplit_df[split_col]=='test']
 
-    print(f"Dataset: {dataset_name} \n  Training data split = {len(df_train)} \n\
-  Validation data split = {len(df_val)} \n  Test data split = {len(df_test)}")
+    print(f"Dataset: {dataset_name} \n\tTraining data split = {len(df_train)} \
+\n\tValidation data split = {len(df_val)} \n\tTest datasets = {list(additional_drv_test_data.keys())}")
     
     # create pytorch data loaders
     train_dataset = ToyBrainsDataloader(
         img_names = df_train[ID_col].values, # TODO change hardcoded
         labels = df_train[label_col].values,
-        img_dir = dataset_path+'/images',
+        img_dir = dataset_path+'/train/images',
         transform = transforms.Compose([transforms.ToTensor()])
         )
     train_loader = DataLoader(
@@ -217,7 +217,7 @@ def fit_DL_model(dataset_path, label_col,
     val_dataset = ToyBrainsDataloader(
         img_names = df_val[ID_col].values, 
         labels = df_val[label_col].values,
-        img_dir = dataset_path+'/images',
+        img_dir = dataset_path+'/train/images',
         transform = transforms.Compose([transforms.ToTensor()])
         )
     val_loader = DataLoader(
@@ -231,45 +231,36 @@ def fit_DL_model(dataset_path, label_col,
     
     # create dataloaders for DeepRepViz() with no shuffle
     drv_train_dataset = {
-            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
+            'dataloader_kwargs': dict(img_dir=dataset_path+'/train/images',
                                     img_names=df_train[ID_col].values,
                                     labels=df_train[LABEL_COL].values,
                                     transform=transforms.ToTensor()),
-            "expected_IDs":df_train[ID_col].values, 
-            "expected_labels":df_train[LABEL_COL].values, 
-        }
+            "expected_IDs":df_train[ID_col].values,  
+            "expected_labels": LabelEncoder().fit_transform(df_train[LABEL_COL].values)}
+
     drv_test_datasets = {
         'val': {
-            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
+            'dataloader_kwargs': dict(img_dir=dataset_path+'/train/images',
                                     img_names=df_val[ID_col].values,
                                     labels=df_val[LABEL_COL].values,
                                     transform=transforms.ToTensor()),
             "expected_IDs":df_val[ID_col].values,
-            "expected_labels":df_val[LABEL_COL].values
-                },
-        'test': {
-            'dataloader_kwargs': dict(img_dir=dataset_path+'/images',
-                                    img_names=df_test[ID_col].values,
-                                    labels=df_test[LABEL_COL].values,
-                                    transform=transforms.ToTensor()),
-            "expected_IDs":df_test[ID_col].values,
-            "expected_labels":df_test[LABEL_COL].values
-                }
-        }            
+            "expected_labels": LabelEncoder().fit_transform(df_val[LABEL_COL].values)}
+        }    
+
     # append any additional test datasets provided too
     for testdata_name, testdata_path in additional_drv_test_data.items():
-        testdata_csv = glob(testdata_path + '/toybrains*.csv')
-        assert len(testdata_csv)==1, f"Toybrains Test dataset found = {testdata_csv} in the path {testdata_path} .."
-        testdata_df = pd.read_csv(testdata_csv[0])
-        
+        # pass test datasets to DeepRepViz that will test the best model and log the results in best_checkpoint.json
+        test_data =  glob(testdata_path + '/toybrains*.csv')
+        assert len(test_data)==1, f"Multiple or no test data found in {testdata_path}. Found = {test_data}"
+        df_test = pd.read_csv(test_data[0])
         drv_test_datasets[testdata_name] = {
             'dataloader_kwargs': dict(img_dir=testdata_path+'/images',
-                                    img_names=testdata_df[ID_col].values,
-                                    labels=testdata_df[LABEL_COL].values,
+                                    img_names=df_test[ID_col].values,
+                                    labels=df_test[label_col].values,
                                     transform=transforms.ToTensor()),
-            "expected_IDs":testdata_df[ID_col].values,
-            "expected_labels":testdata_df[LABEL_COL].values}
-
+            "expected_IDs"   :df_test[ID_col].values,
+            "expected_labels":LabelEncoder().fit_transform(df_test[label_col].values)}
 
     # load model
     model = model_class(**model_kwargs)
@@ -302,26 +293,13 @@ def fit_DL_model(dataset_path, label_col,
     trainer = L.Trainer(callbacks=callbacks,
                         logger=logger,
                         overfit_batches = 5 if debug else 0,
-                        log_every_n_steps= 2 if debug else 50,
+                        log_every_n_steps= 2 if debug else 20,
                         **trainer_args) # deterministic=True
     trainer.fit(
         model=lightning_model,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader)
-        
-    # test model
-#     test_scores = trainer.test(lightning_model, verbose=False,
-#                                dataloaders=test_loader,
-#                                ckpt_path="best")[0]
 
-#     print("Test data performance with the best model:\n\
-# -------------------------------------------------------\n\
-# Dataset      = {} ({})\n\
-# Balanced Acc = {:.2f}% \t D2 = {:.2f}%".format(
-#         dataset_path, dataset_name, 
-#          clear
-# ['test_BAC']*100,  test_scores['test_D2']*100))
-    
     # create and save the DeepRepViz v1 table 
     if gen_v1_table:
         raw_csv_path = glob(f'{dataset_path}/*{dataset_name}.csv')[0]
@@ -343,8 +321,6 @@ def fit_DL_model(dataset_path, label_col,
 ########################             MAIN function end             ########################
 ###########################################################################################
 
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', default='dataset/toybrains_n10000', type=str,
@@ -358,18 +334,19 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--unique_name', default='', type=str)
     parser.add_argument('-d', '--debug',  action='store_true')
     parser.add_argument('-r', '--random_seed', default=None, type=int)
+    parser.add_argument('-l', '--learning_rate', default=0.01, type=float)
     # parser.add_argument('-j','--n_jobs', default=20, type=int)
     args = parser.parse_args()
     
     # next check that the toybrains dataset is generated and available
     DATA_DIR = os.path.abspath(args.data_dir)
-    DATA_CSV = glob(DATA_DIR + '/toybrains*.csv')
+    DATA_CSV = glob(DATA_DIR + '/train/toybrains*.csv')
     assert len(DATA_CSV)==1, f"Toybrains dataset found = {DATA_CSV}.\
- \nEnsure that that the dataset {args.data_dir} is generated using the `create_toybrains.py` script in the toybrains repo. \
+ \nEnsure that that the dataset {args.data_dir} is generated using the `1_create_toybrains.py` script in the toybrains repo. \
 Also ensure only one dataset exists for the given query '{DATA_DIR}'."
     DATA_CSV = DATA_CSV[0]
     ID_COL = 'subjectID'
-    LABEL_COL = 'lbl_lesion'
+    LABEL_COL = 'lbl_y'
     N_SAMPLES = int(DATA_DIR.split('_n')[-1].split('_')[0])
 
     unique_name = args.unique_name
@@ -381,25 +358,11 @@ Also ensure only one dataset exists for the given query '{DATA_DIR}'."
         args.batch_size = 5
         args.k_fold = 2 if args.k_fold>2 else args.k_fold
         num_workers = 5
-        args.no_ood_val = True
+        # args.no_ood_val = False
     else:
         num_workers = 8
 
     start_time = datetime.now()
-
-    ### collect the corresponding OOD test data 
-    OOD_test_datasets = {}
-    if not args.no_ood_val:
-        test_suffix = '_test'# Hardcoded
-        test_nsamples = 1000 # Hardcoded: n samples of toybrains test datasets are 1000
-        data_dir_test = re.sub(f'_n{N_SAMPLES}_', f'_n{test_nsamples}_', DATA_DIR) + test_suffix
-        data_dir_test_noconf = re.sub('cX...', 'cX000', re.sub('cy...','cy000', data_dir_test))
-        assert os.path.exists(data_dir_test_noconf), f"Could not find the equivalent 'no-conf' dataset {data_dir_test_noconf} for {DATA_DIR}"
-
-        data_dir_test_notrue = re.sub('yX...','yX000', data_dir_test) 
-        assert os.path.exists(data_dir_test_notrue), f"Could not find the equivalent 'no-true' dataset {data_dir_test_notrue} for {dataset}"
-        
-        OOD_test_datasets = {'test-no-conf': data_dir_test_noconf, 'test-no-true': data_dir_test_notrue}
     
     # prepare the data splits as a dataframe mapping the subjectID to the split and trial
     data = pd.read_csv(DATA_CSV)
@@ -409,34 +372,29 @@ Available colnames = {data.columns.tolist()}"
 Available colnames = {data.columns.tolist()}"
 
     ### SPLITS: Create the n-fold splits for the data
-    # drop all columns except subjectID and label
+    # use only the columns subjectID and label to create the splits
     datasplit_df = data.drop(columns=[c for c in data.columns if c not in [ID_COL, LABEL_COL]])
     datasplit_df = datasplit_df.set_index(ID_COL)
     # create 'trial_x' columns: init as columns as args.k_fold
-    for trial in range(args.k_fold):
+    for trial in range(args.k_fold): 
         datasplit_df[f'trial_{trial}'] = 'unknown'
-    # first, set aside 20% of the data as test and assign it commonly to all folds
-    train_idxs, test_idxs = train_test_split(datasplit_df.index, test_size=0.2,
-                                             random_state=args.random_seed)
-    for trial in range(args.k_fold):
-        datasplit_df.loc[test_idxs, f'trial_{trial}'] = 'test'
 
-    if args.k_fold <= 1: # if 1 fold then initialize all data to the first trial
-        train_idxs, val_idxs = train_test_split(train_idxs, test_size=0.1, 
-                                               random_state=args.random_seed)
-        datasplit_df.loc[train_idxs, 'trial_0'] = 'train'
-        datasplit_df.loc[val_idxs, 'trial_0'] = 'val'
-    else: # if k-fold then split the data into k times and assign each to a sep trial
-        splitter = StratifiedKFold(n_splits=args.k_fold,
-                                   shuffle=True,
-                                   random_state=args.random_seed)
-        splits = splitter.split(train_idxs, y=datasplit_df.loc[train_idxs, LABEL_COL])
-        for trial_idx, (train_idxs_i, val_idxs_i) in enumerate(splits): 
-            datasplit_df.loc[train_idxs[train_idxs_i], f'trial_{trial_idx}'] = 'train'
-            datasplit_df.loc[train_idxs[val_idxs_i], f'trial_{trial_idx}'] = 'val'
+    trainval_idxs = datasplit_df.index
+    
+    splitter = StratifiedShuffleSplit(n_splits=args.k_fold, test_size=0.1,
+                                        random_state=args.random_seed)
+    splits = splitter.split(trainval_idxs, y=datasplit_df[LABEL_COL])
+    for trial_idx, (train_idxs_i, val_idxs_i) in enumerate(splits): 
+        datasplit_df.loc[trainval_idxs[train_idxs_i], f'trial_{trial_idx}'] = 'train'
+        datasplit_df.loc[trainval_idxs[val_idxs_i], f'trial_{trial_idx}']   = 'val'
 
     datasplit_df = datasplit_df.sort_index()
-    (datasplit_df.filter(like='trial')!='unknown').all(), "some data points are not assigned to any split. {}".format(datasplit_df)
+    # ensure that all data points are assigned to either train or val split
+    assert (datasplit_df.filter(like='trial').map(lambda x: x!='unknown')).all().all(), "some data points are not assigned to any split. {}".format(datasplit_df)
+
+    ### collect all test datasets available
+    test_datasets = {os.path.basename(d):d for d in glob(DATA_DIR + '/test_*')}
+    if args.no_ood_val: test_datasets = {k:v for k,v in test_datasets.items() if 'all' not in k}
 
     ### MODEL: configure the DL model
     DL_MODEL = SimpleCNN
@@ -452,11 +410,11 @@ Available colnames = {data.columns.tolist()}"
                                 DATA_DIR, 
                                 label_col=LABEL_COL, ID_col=ID_COL, 
                                 trial=f'trial_{trial}', datasplit_df=datasplit_df, 
-                                additional_drv_test_data=OOD_test_datasets,
+                                additional_drv_test_data=test_datasets,
                                 model_class=DL_MODEL, model_kwargs=model_kwargs,
                                 debug=args.debug, 
-                                learning_rate=0.03,
-                                additional_callbacks=[],
+                                learning_rate=args.learning_rate,
+                                additional_callbacks=[] , 
                                 additional_loggers=[],
                                 batch_size=args.batch_size, num_workers=num_workers,
                                 trainer_args=dict(

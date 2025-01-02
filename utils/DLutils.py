@@ -2,6 +2,7 @@ import os
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
 
 # deep learning imports
 import torch
@@ -10,7 +11,7 @@ import torch.nn as nn
 from torchmetrics import Metric
 import torchvision
 # custom imports 
-from utils.metrics import explained_deviance
+from utils.metrics import _explained_deviance
 
 ###########################################################################################
 ############################          Dataloader         ##################################
@@ -21,6 +22,13 @@ class ToyBrainsDataloader(Dataset):
         self.img_dir = img_dir
         self.img_names = img_names
         self.labels = labels
+        # if labels are encoded as categorical names (str) then convert to integer-encoding
+        self.label_enc = None
+        if isinstance(self.labels[0], str):
+            enc = LabelEncoder().fit(self.labels)
+            # save the encoding as a dict
+            self.label_enc = {i:enc.classes_[i] for i in range(len(enc.classes_))}
+            self.labels = enc.transform(self.labels)
         self.transform = transform
         
     def __getitem__(self, index):
@@ -61,7 +69,7 @@ class D2metric(Metric):
             
 
     def compute(self):
-        return explained_deviance(
+        return _explained_deviance(
             self.targets.detach().cpu(), 
             y_pred_logits=self.logits.detach().cpu(), 
             unique_y=self.unique_y)
