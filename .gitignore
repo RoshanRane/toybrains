@@ -25,3 +25,4 @@ __*.ipynb
 *.html
 **/run.csv
 **/baseline_results.csv
+_archive/exp*
