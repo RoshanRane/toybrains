@@ -187,7 +187,8 @@ def gen_toybrains_dataset(config_fname, covars, rules,
                             for dest_node, proba_args in vi.items():
                                 if ('lbl' not in dest_node): 
                                     rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
-
+            # delete any dummy covariates that were created for the direct effects
+            covars_copy = {k:v for k,v in covars_copy.items() if not k.startswith('cov_dummy_')}
             _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
                                     config_write_kwargs={},
                                     n_samples=n_samples_test_ood, show_dag=False, 

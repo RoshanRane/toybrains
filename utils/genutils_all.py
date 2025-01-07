@@ -6,16 +6,19 @@ from math import log
 from pprint import pprint
 
 #####################################################################################
+def _make_dataset_basename(lat_dir, cons):
+    basefilename = f"con{len(cons)}_{lat_dir.replace('_','-')}"
+    # append the names of the confounders to the file name
+    for ci in cons:
+        basefilename += "_" + ci.replace('_','-')
+    return basefilename
 
 def make_dataset_name(lat_dir, cons, 
                     cX, cy, Xy, 
                     suffix='',
                     effect_mul=lambda e: e):
                     
-    basefilename = f"con{len(cons)}_{lat_dir.replace('_','-')}"
-    # append the names of the confounders to the file name
-    for ci in cons:
-        basefilename += "_" + ci.replace('_','-')
+    basefilename = _make_dataset_basename(lat_dir, cons)
     if suffix != '': suffix = '_' + suffix
     return f"{basefilename}_cX{int(effect_mul(cX)):03d}_cy{int(effect_mul(cy)):03d}_Xy{int(effect_mul(Xy)):03d}{suffix}"
 
