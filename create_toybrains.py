@@ -216,7 +216,7 @@ class ToyBrainsData:
         assert hasattr(config, 'RULES_COV_TO_GEN')
         # sanity checks
         for cov, rules in config.RULES_COV_TO_GEN.items():
-            assert cov in self.COVARS.keys() or cov in self.GENVARS.keys(), f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the covariate {cov} has not been previously defined in COVARS\
+            assert cov in self.COVARS.keys() or cov in self.GENVARS.keys(), f"[CONFIG file Sanity check] In the rules RULES_COV_TO_GEN, the covariate {cov} has not been previously defined in COVARS \
 and it is not a generative attribute either."
             if cov in self.COVARS.keys(): # only check for covars and not for genvars
                 for cov_state, updates in rules.items():
@@ -250,6 +250,8 @@ and it is not a generative attribute either."
         '''Function handles situations in the config of RULES_COV_TO_GEN such as when
          user provides a tuple of values as cov_state (continuous) instead of a single cov_state
          Return None if no rule is defined for the covariate = cov_state'''
+        if cov_name not in self.RULES_COV_TO_GEN.keys(): 
+            return None
         rules = self.RULES_COV_TO_GEN[cov_name] 
         if cov_state in rules.keys():
             return rules[cov_state]
@@ -909,7 +911,9 @@ self.load_generated_dataset()"
         col_order = col_order + [c for c in df_out.columns if c not in col_order]
         df_out = df_out[col_order] 
         if verbose>1: print("generated results table with {} rows and {} columns.".format(*df_out.shape))
-        if verbose>2: print(df_out["dataset", "out", "inp", "trial", "model", "type", "score_test_balanced_accuracy"])
+        if verbose>2:
+            test_acc_columns = df_out.filter(regex='.*test.*all.*accuracy.*').columns.tolist()
+            print(df_out[["dataset", "out", "inp", "trial", "model", "type"] + test_acc_columns])
         df_out.to_csv(f"{results_out_dir}/run.csv", index=False)
 
         # delete the temp csv files

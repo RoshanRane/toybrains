@@ -99,7 +99,7 @@ at {toy.OUT_DIR}toybrains_n*_{outdir_suffix} ...")
             toy.generate_dataset_images(n_jobs=n_jobs, verbose=verbose) 
 
     # remove the config files after generating the data for test datasets
-    if split!="train": os.remove(config_fname)
+    # if split!="train": os.remove(config_fname)
     return toy
 
 
@@ -158,48 +158,84 @@ def gen_toybrains_dataset(config_fname, covars, rules,
         ### create an OOD test data by disabling every direct latent, confounder, and mediator
         for cov in config_write_kwargs['CONFOUNDERS'] + \
                 config_write_kwargs['MEDIATORS'] + \
-                config_write_kwargs['LATENTS_DIRECT'] +\
-                ['none']: # also one more (called none) with all disabled at the same time.
-            # name of the OOD test dataset
-            split=f'test_{cov}'
-            rules_cov = deepcopy(rules)
-            rules_cov_out = deepcopy(rules_cov)
-            covars_copy = deepcopy(covars)
+                config_write_kwargs['LATENTS_DIRECT']: # also one more (called none) with all disabled at the same time.
 
-            # go through all edges in the DAG and set the effect size of cov-->lat to 0
-            for src_node,v in rules_cov.items():
-                # only modify the rules of the cov that is OOD tested
-                if (src_node==cov or cov=='none'): # for none, set all the rules to uniform distribution except cov-->lbl 
-                    ## (1) for direct effects, change the variable to another dummy covariate that has the same properties as the ldir variable (dtype, n_states)
-                    if src_node in config_write_kwargs['LATENTS_DIRECT']:
-                        # create a new dummy covariate with exact same rules as ldir
-                        rules_cov_out[f'cov_dummy_{src_node}'] = rules_cov[src_node]
-                        # delete exisiting rule of ldir
-                        del rules_cov_out[src_node]
-                        # get the states of the ldir to create a dummy covariate with the same states
-                        if f'cov_dummy_{src_node}' not in covars_copy:
+            ### Create 2 version of OOD test data: 
+            # (a) excluding only this covariate (b) including only this covariate
+            for OOD_type in ['without', 'with']:
+
+                split=f'test_{OOD_type}_{cov}'
+                rules_cov = deepcopy(rules)
+                rules_cov_out = deepcopy(rules)
+                covars_copy = deepcopy(covars)
+
+                # iterate through all edges in the DAG 
+                for src_node,v in rules_cov.items():
+                    
+                    flag_disable_edge = (
+                        # for the without case (a) only set cov-->L to 0 of the requested covariate and
+                        (OOD_type=='without' and src_node==cov) or 
+                        # for the with case (b) set cov-->L to 0 for all covariates except the requested one
+                        (OOD_type=='with' and src_node!=cov) or 
+                        # for the none case, set all cov-->L to 0 (uniform dist.)
+                        (cov=='none')
+                    )
+                    if flag_disable_edge: 
+                        # (algorithm note) the disabling of cov-->y must be done carefully such that the variance of y is not affected
+                        # (i) if cov== ldir (direct effect from a latent in L), 
+                        # change the latent variable to another dummy covariate that has the same properties as the ldir variable (dtype, n_states)
+                        if src_node in config_write_kwargs['LATENTS_DIRECT']:
+                            # create a new dummy covariate with exact same rules as ldir and delete exisiting rule of ldir
+                            rules_cov_out[f'cov_dummy_{src_node}'] = rules_cov[src_node]
+                            del rules_cov_out[src_node]
+                            # also add it in the COVARS list to avoid the sanity check errors in ToybrainsData
                             covars_copy.update({f'cov_dummy_{src_node}': {'states': list(v.keys())}})
+                            
+                        # now disable c --> L paths for confounds / mediators 
+                        elif src_node in config_write_kwargs['CONFOUNDERS']+config_write_kwargs['MEDIATORS']:
+                            for src_node_state, vi in v.items():
+                                for dest_node, proba_args in vi.items():
+                                    # we don't disable cov-->y since modifying it can change the variance of y in the test data
+                                    if ('lbl' not in dest_node) and (dest_node != cov): 
+                                        rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
 
-                    ## (2) only disable c --> L paths for confounds / mediators 
-                    elif src_node in config_write_kwargs['CONFOUNDERS']+config_write_kwargs['MEDIATORS']:
-                        
-                        for src_node_state, vi in v.items():
-                            for dest_node, proba_args in vi.items():
-                                if ('lbl' not in dest_node): 
-                                    rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
-            # delete any dummy covariates that were created for the direct effects
-            covars_copy = {k:v for k,v in covars_copy.items() if not k.startswith('cov_dummy_')}
-            _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
-                                    config_write_kwargs={},
-                                    n_samples=n_samples_test_ood, show_dag=False, 
-                                    show_probas=None,
-                                    outdir_suffix=outdir_suffix, 
-                                    overwrite_existing=overwrite_existing, 
-                                    gen_images=gen_images,
-                                    n_jobs=n_jobs, verbose=verbose)
-        # for ['none'] remove all confounders and mediators
-        # generate in parallel
-            # ood_rules.update({split: rules_cov})
+                _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
+                                        config_write_kwargs={},
+                                        n_samples=n_samples_test_ood, show_dag=False, 
+                                        show_probas=None,
+                                        outdir_suffix=outdir_suffix, 
+                                        overwrite_existing=overwrite_existing, 
+                                        gen_images=gen_images,
+                                        n_jobs=n_jobs, verbose=verbose)
+
+        # generate one more test data 'test_none' with all cov-->L effects disabled
+        split='test_none'
+        rules_cov = deepcopy(rules)
+        rules_cov_out = deepcopy(rules)
+        covars_copy = deepcopy(covars)
+
+        for src_node,v in rules_cov.items():
+            if src_node in config_write_kwargs['LATENTS_DIRECT']:
+                # create a new dummy covariate with exact same rules as ldir and delete exisiting rule of ldir
+                rules_cov_out[f'cov_dummy_{src_node}'] = rules_cov[src_node]
+                del rules_cov_out[src_node]
+                # also add it in the COVARS list to avoid the sanity check errors in ToybrainsData
+                covars_copy.update({f'cov_dummy_{src_node}': {'states': list(v.keys())}})
+
+            elif src_node in config_write_kwargs['CONFOUNDERS']+config_write_kwargs['MEDIATORS']:
+                for src_node_state, vi in v.items():
+                    for dest_node, proba_args in vi.items():
+                        if ('lbl' not in dest_node): 
+                            rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
+        
+        _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
+                                config_write_kwargs={},
+                                n_samples=n_samples_test_ood, show_dag=False, 
+                                show_probas=None,
+                                outdir_suffix=outdir_suffix, 
+                                overwrite_existing=overwrite_existing, 
+                                gen_images=gen_images,
+                                n_jobs=n_jobs, verbose=verbose)
 
         # Parallel(n_jobs=3, verbose=verbose)(
         #     delayed(gen_test_data)(split, rules_cov, 

@@ -6,6 +6,8 @@ from math import log
 from pprint import pprint
 
 #####################################################################################
+_remove_dataset_effs = lambda f: re.sub(r'(cX|cy|Xy)\d+', r'\1***', f)
+
 def _make_dataset_basename(lat_dir, cons):
     basefilename = f"con{len(cons)}_{lat_dir.replace('_','-')}"
     # append the names of the confounders to the file name
