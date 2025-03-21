@@ -81,6 +81,7 @@ class LightningModel(L.LightningModule):
         self._metric_spec = torchmetrics.Specificity(task=task, num_classes=num_classes)
         self._metric_recall = torchmetrics.Recall(task=task, num_classes=num_classes)
         self.metric_D2 = D2metric() 
+        self.metric_deviance = DevianceMetric()
 
     def forward(self, x):
         return self.model(x)
@@ -105,6 +106,7 @@ class LightningModel(L.LightningModule):
         recall = self._metric_recall(predicted_labels, true_labels)
         BAC = (spec+recall)/2
         D2 = self.metric_D2(logits, true_labels)
+        Deviance = self.metric_deviance(logits, true_labels)
         metrics = {'loss':loss, 'BAC':BAC, 'D2':D2}
         return true_labels, logits, metrics
 

@@ -5,7 +5,6 @@ from sklearn.dummy import DummyClassifier as _DummyClassifier
 from sklearn.metrics import log_loss as _log_loss
 
 
-
 def _get_y_pseudo_proba(y):
     # check that y is binary
     y = np.array(y)
@@ -24,6 +23,14 @@ def _get_y_pseudo_proba(y):
 def _logit(p):
     return np.log(p / (1 - p))
 
+####################################################################################################
+def deviance(y, y_pred, labels=[0,1]):
+    '''deviance = -2 * (log-likelihood of the model - log-likelihood of the saturated model)
+    The saturated model is the model that perfectly predicts the observed data.
+    '''
+    ll_satur = np.round(-_log_loss(y, y, normalize=False, labels=labels)     , decimals=5)
+    ll_model = np.round(-_log_loss(y, y_pred, normalize=False, labels=labels), decimals=5)
+    return -2 * (ll_model - ll_satur)
 ####################################################################################################
 
 def _explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None, 
@@ -47,21 +54,23 @@ def _explained_deviance(y_true, y_pred_logits=None, y_pred_probas=None,
     if y_pred_probas.ndim == 1: y_pred_probas = np.stack([1-y_pred_probas, y_pred_probas], axis=-1)
     total_probas = y_pred_probas.sum(axis=-1).round(decimals=4)
     assert (abs(total_probas-1.)<0.1).all(), f"the probabilities do not sum to one, {total_probas}" 
-    # compute a null model's predicted probability
+
+    # compute the null model's predicted probability
     X_dummy = np.zeros(len(y_true))
     if null_model_strategy == "uniform":
         y_null_probas = np.full(y_pred_probas.shape, 1/len(unique_y))
     else: # other strategy can be {"most_frequent", "prior", "stratified",  "constant"}
         y_null_probas = _DummyClassifier(strategy=null_model_strategy).fit(X_dummy, y_true).predict_proba(X_dummy)
-    # suggestion from https://stackoverflow.com/a/53215317
-    llf    = -_log_loss(y_true, y_pred_probas, normalize=False, labels=unique_y) 
-    llnull = -_log_loss(y_true, y_null_probas, normalize=False, labels=unique_y) 
-    ### McFadden’s pseudo-R-squared: 1 - (llf / llnull)
-    explained_deviance = 1 - (llf / llnull)
-    ## Cox & Snell’s pseudo-R-squared: 1 - exp((llnull - llf)*(2/nobs))
-    # explained_deviance = 1 - np.exp((llnull - llf) * (2 / len(y_pred_probas))) ## TODO, not implemented
+    # deviance = 2*(loglike_satur - loglike_model) = 2*(-ll_model) = (2*negative_loglikelihood_model) suggestion from https://stackoverflow.com/a/53215317
+    deviance_model = 2 * _log_loss(y_true, y_pred_probas, normalize=False, labels=unique_y) 
+    deviance_null  = 2 * _log_loss(y_true, y_null_probas, normalize=False, labels=unique_y) 
+
+    ### McFadden’s pseudo-R-squared: 1 - (ll_model / ll_null)
+    explained_deviance = 1 - (deviance_model / deviance_null)
+    ## Cox & Snell’s pseudo-R-squared: 1 - exp((ll_null - ll_model)*(2/nobs))
+    # explained_deviance = 1 - np.exp((ll_null - ll_model) * (2 / len(y_pred_probas))) ## TODO, not implemented
     if returnloglikes:
-        return explained_deviance, {'loglike_model':llf, 'loglike_null':llnull}
+        return explained_deviance, {'deviance_model':deviance_model, 'deviance_null':deviance_null}
     else:
         return explained_deviance
 
@@ -79,6 +88,7 @@ def d2(y, y_pred):
             y = y[:,1].squeeze()
 
     return _explained_deviance(y_true=y, y_pred_probas=y_pred, unique_y=[0,1]) # unique_y TODO remove hardcoding
+
 
 
 ####################################################################################################
