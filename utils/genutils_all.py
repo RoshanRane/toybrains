@@ -16,34 +16,38 @@ def _make_dataset_basename(lat_dir, cons):
     return basefilename
 
 def make_dataset_name(lat_dir, cons, 
-                    cX, cy, Xy, 
+                    cX, cys, Xy, 
                     suffix='',
                     effect_mul=lambda e: e):
                     
     basefilename = _make_dataset_basename(lat_dir, cons)
     if suffix != '': suffix = '_' + suffix
-    return f"{basefilename}_cX{int(effect_mul(cX)):03d}_cy{int(effect_mul(cy)):03d}_Xy{int(effect_mul(Xy)):03d}{suffix}"
+    name_str = f"{basefilename}_cX{int(effect_mul(cX)):03d}"
+    for i, cy in enumerate(cys):
+        name_str += f"_c{i+1}y{int(effect_mul(cy)):03d}"
+    name_str += f"_Xy{int(effect_mul(Xy)):03d}{suffix}"
+    return name_str
 
 
 def break_dataset_name(dataset_name, effect_mul=1):
     # check if the dataset name contains the prefixes 'toybrains_n*_'. if yes, remove it first
     if dataset_name.startswith('toybrains_n'):
-        parts = dataset_name.split('_')[2:]
+        parts = dataset_name.split('__')[0].split('_')[2:]
     else:
         parts = dataset_name.split('_')
-    n_covs = int(parts[0].replace('con',''))
-    ldir = parts[1]
-    ldir = '_'.join(ldir.rsplit('-', 1)) # replace the last '-' with '_' for latents
-    cons = parts[2:2+n_covs]
-    cons = [ci.replace('-', '_') for ci in cons]
-    cX = int(parts[2+n_covs+0].replace('cX',''))/effect_mul
-    cy = int(parts[2+n_covs+1].replace('cy',''))/effect_mul
-    Xy = int(parts[2+n_covs+2].replace('Xy',''))/effect_mul
-    suffix = parts[2+n_covs+3] if len(parts) > 4+n_covs else ''
-    
-    assert n_covs+5 <= len(parts) <= n_covs+6, f"dataset name {dataset_name} has more or less '_' than expected {n_covs+4}"
-    
-    return n_covs, ldir, cons, cX, cy, Xy, suffix
+
+    n_covs = int(parts.pop(0).replace('con',''))
+    ldir = '_'.join(parts.pop(0).rsplit('-', 1)) # quickfix: replace the last '-' with '_' for latents
+    # cons is a list of con names, so we need to iterate over them
+    cons=[parts.pop(0).replace('-', '_') for _ in range(n_covs)]
+    cX = int(parts.pop(0).replace('cX',''))/effect_mul
+    # cys is a list of cy values, so we need to iterate over them
+    cys = [int(parts.pop(0).replace(f'c{i+1}y',''))/effect_mul for i in range(n_covs)]
+    Xy = int(parts.pop(0).replace('Xy',''))/effect_mul
+    suffix = parts.pop(0) if len(parts) > 0 else ''
+    assert len(parts) == 0, f"dataset name {dataset_name} has more parts than expected {n_covs+4}, remaining parts = {parts}"
+
+    return n_covs, ldir, cons, cX, cys, Xy, suffix
 
 #####################################################################################
 
@@ -69,7 +73,7 @@ def sample_covars(n_covs=100, ctype_probs={'cont':0.34, 'cat2': 0.33, 'catn': 0.
         else:
             raise ValueError(f"unknown covariate type {ctype}")
 
-        covs.update({f'cov_{ci}_{ctype}': states})
+        covs.update({f'cov_{ci+1}_{ctype}': states})
     return covs
 
 #####################################################################################
@@ -86,13 +90,17 @@ def sample_influential_covars(covs, attrs,
     
     # select the n=n_covs_lbl covariates that influence the label y 
     covs_remaining = list(covs.keys())
-    covs_lbl = np.random.choice(covs_remaining, 
-                                size=n_covs_lbl, replace=False).tolist()
+    # covs_lbl = np.random.choice(covs_remaining, 
+    #                             size=n_covs_lbl, replace=False).tolist()
+    # ICON EXP HACK: choose the first n_covs_lbl covariates as the ones that influence the label for ease of interpreting
+    covs_lbl = covs_remaining[:n_covs_lbl]
     if verbose>0: print(f"Other covariates that influence the label  (c-->y) = {covs_lbl}")
 
     # second, select n=n_covs_enc covariates out of the covs_lbl to also influence attributes (confounders) 
-    covs_enc = np.random.choice(covs_lbl, 
-                                size=n_covs_enc, replace=False).tolist()
+    # covs_enc = np.random.choice(covs_lbl, 
+    #                             size=n_covs_enc, replace=False).tolist()
+    # ICON EXP HACK: choose the first n_covs_lbl covariates as the ones that influence the label for ease of interpreting
+    covs_enc = covs_lbl[:n_covs_enc]
     if verbose>0: print(f"Covariates chosen as confounder        (L<--c-->y) = {covs_enc}")
 
     # finally, select n=(n_attrs - n_covs_enc - 1 (lat_direct)) covariates to influence each of the remaining attributes 
