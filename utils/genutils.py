@@ -4,6 +4,7 @@ import re
 import numpy as np
 import pandas as pd
 from copy import deepcopy
+import itertools
 
 import pprint
 from IPython.display import display
@@ -54,15 +55,15 @@ RULES_COV_TO_GEN = {}\n'.format(opt_lists,
 ###################################################################################################
         
 def _gen_toybrains_dataset(
-                split,  
+                split_name,  
                 config_fname, covars, rules, config_write_kwargs,
                 n_samples, show_dag, show_probas, 
                 outdir_suffix, overwrite_existing, gen_images,
                 n_jobs, verbose):
     ## 1) Write the config file
-    # for test datasets, create a temporary config file with the split name appended and later delete it
-    if split!="train":
-        config_fname = config_fname.replace(".py", f"_{split}.py")
+    # for test datasets, create a temporary config file with the split_name name appended and later delete it
+    if split_name!="train":
+        config_fname = config_fname.replace(".py", f"_{split_name}.py")
     
     # write the config file if it doesn't already exist
     if os.path.exists(config_fname) and not overwrite_existing:
@@ -82,14 +83,14 @@ def _gen_toybrains_dataset(
 
     ## 3) Generate the dataset by sampling the gen. variables in a table
     # check if the dataset has already been generated
-    dataset_table_file = glob(f"{toy.OUT_DIR}*{outdir_suffix}/{split}/*{outdir_suffix}.csv")
+    dataset_table_file = glob(f"{toy.OUT_DIR}*{outdir_suffix}/{split_name}/*{outdir_suffix}.csv")
     if len(dataset_table_file)>0 and not overwrite_existing:
         print(f"Dataset table '{dataset_table_file[0]}' already exists. Not overwriting it.")
     else:
         if verbose>0: print(f"Generating dataset table with {n_samples} samples and storing \
 at {toy.OUT_DIR}toybrains_n*_{outdir_suffix} ...")
         _ = toy.generate_dataset_table(n_samples=n_samples,
-                                       split=split, 
+                                       split=split_name, 
                                        outdir_suffix=outdir_suffix)
     ## 4) generate the images
     if gen_images:
@@ -99,7 +100,7 @@ at {toy.OUT_DIR}toybrains_n*_{outdir_suffix} ...")
             toy.generate_dataset_images(n_jobs=n_jobs, verbose=verbose) 
 
     # remove the config files after generating the data for test datasets
-    # if split!="train": os.remove(config_fname)
+    # if split_name!="train": os.remove(config_fname)
     return toy
 
 
@@ -124,8 +125,8 @@ def gen_toybrains_dataset(config_fname, covars, rules,
     # append the number of samples to the outdir_suffix manually
     outdir_suffix = f"n{n_samples}_" + outdir_suffix
 
-    split='train'
-    toy = _gen_toybrains_dataset(split, 
+    split_name='train'
+    toy = _gen_toybrains_dataset(split_name, 
                                 config_fname, covars, rules, config_write_kwargs=config_write_kwargs, 
                                 n_samples=n_samples, show_dag=show_dag, 
                                 show_probas=show_probas, 
@@ -136,8 +137,8 @@ def gen_toybrains_dataset(config_fname, covars, rules,
         
     # 2) Test data
     if n_samples_test > 0:
-        split='test_all'
-        _gen_toybrains_dataset(split, 
+        split_name='test_all'
+        _gen_toybrains_dataset(split_name, 
                                 config_fname, covars, rules, 
                                 config_write_kwargs={}, 
                                 n_samples=n_samples_test, show_dag=False, 
@@ -154,62 +155,70 @@ def gen_toybrains_dataset(config_fname, covars, rules,
         if  len(config_write_kwargs['LATENTS_DIRECT'])==0 and len(config_write_kwargs['CONFOUNDERS'])==0 and len(config_write_kwargs['MEDIATORS'])==0:
             print("[WARN] No covariates provided either in 'LATENTS_DIRECT', 'CONFOUNDERS', or 'MEDIATORS' to generate OOD test datasets.\
  Only generating the 'test_none' OOD test data...")
-
+        
+        
         ### create an OOD test data by disabling every direct latent, confounder, and mediator
-        for cov in config_write_kwargs['CONFOUNDERS'] + \
-                config_write_kwargs['MEDIATORS'] + \
-                config_write_kwargs['LATENTS_DIRECT']: # also one more (called none) with all disabled at the same time.
 
-            ### Create 2 version of OOD test data: 
+        # Generate all subsets excluding the full set (already generated as test_all) and the empty set (will be generated next as test_none)
+        all_covs = config_write_kwargs['CONFOUNDERS'] + config_write_kwargs['MEDIATORS'] + config_write_kwargs['LATENTS_DIRECT']
+        cov_subsets = list(itertools.chain.from_iterable(
+            itertools.combinations(all_covs, r) for r in range(1, len(all_covs))  # start with atleast 1 and stop before len(all_covs)
+            ))
+
+        for cov_subset in cov_subsets: # also one more (called none) with all disabled at the same time.            
+            cov_subset = sorted(cov_subset)
+            # ### Create 2 version of OOD test data: 
             # (a) excluding only this covariate (b) including only this covariate
-            for OOD_type in ['without', 'with']:
+            # for OOD_type in ['with']: # ['with', 'without']
+            split_name=f'test_with_'
+            for i, cov in enumerate(cov_subset):
+                if i>0: split_name += '--'
+                split_name += f'{cov}'
+            rules_cov = deepcopy(rules)
+            rules_cov_out = deepcopy(rules)
+            covars_copy = deepcopy(covars)
 
-                split=f'test_{OOD_type}_{cov}'
-                rules_cov = deepcopy(rules)
-                rules_cov_out = deepcopy(rules)
-                covars_copy = deepcopy(covars)
+            # iterate through all edges in the DAG 
+            for src_node,v in rules_cov.items():
+                
+                flag_disable_edge = (
+                    # for the with case (b) set cov-->L to 0 for all covariates except the requested one
+                    (src_node not in cov_subset) or
+                    # # for the none case, set all cov-->L to 0 (uniform dist.)
+                    ('none' in cov_subset)
+                    # # for the without case (a) only set cov-->L to 0 of the requested covariate and
+                    # (OOD_type=='without' and src_node==cov) or 
+                )
+                if flag_disable_edge: 
+                    # (algorithm note) the disabling of cov-->y must be done carefully such that the variance of y is not affected
+                    # (i) if cov== ldir (direct effect from a latent in L), 
+                    # add a dummy copy of the latent variable that has the same properties as the ldir variable (dtype, n_states) so that the variance of y remains unchanged
+                    if src_node in config_write_kwargs['LATENTS_DIRECT']:
+                        # create a new dummy covariate with exact same rules as ldir and delete exisiting rule of ldir
+                        rules_cov_out[f'cov_dummy_{src_node}'] = rules_cov[src_node]
+                        del rules_cov_out[src_node]
+                        # also add it in the COVARS list to avoid the sanity check errors in ToybrainsData
+                        covars_copy.update({f'cov_dummy_{src_node}': {'states': list(v.keys())}})
+                        
+                    # for confounds / mediators just disable the c --> L path. This removes the path but keeps the variance of y unchanged
+                    elif src_node in config_write_kwargs['CONFOUNDERS']+config_write_kwargs['MEDIATORS']:
+                        for src_node_state, vi in v.items():
+                            for dest_node, proba_args in vi.items():
+                                # we don't disable cov-->y since modifying it can change the variance of y in the test data
+                                if ('lbl' not in dest_node) and (dest_node != cov): 
+                                    rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
 
-                # iterate through all edges in the DAG 
-                for src_node,v in rules_cov.items():
-                    
-                    flag_disable_edge = (
-                        # for the without case (a) only set cov-->L to 0 of the requested covariate and
-                        (OOD_type=='without' and src_node==cov) or 
-                        # for the with case (b) set cov-->L to 0 for all covariates except the requested one
-                        (OOD_type=='with' and src_node!=cov) or 
-                        # for the none case, set all cov-->L to 0 (uniform dist.)
-                        (cov=='none')
-                    )
-                    if flag_disable_edge: 
-                        # (algorithm note) the disabling of cov-->y must be done carefully such that the variance of y is not affected
-                        # (i) if cov== ldir (direct effect from a latent in L), 
-                        # change the latent variable to another dummy covariate that has the same properties as the ldir variable (dtype, n_states)
-                        if src_node in config_write_kwargs['LATENTS_DIRECT']:
-                            # create a new dummy covariate with exact same rules as ldir and delete exisiting rule of ldir
-                            rules_cov_out[f'cov_dummy_{src_node}'] = rules_cov[src_node]
-                            del rules_cov_out[src_node]
-                            # also add it in the COVARS list to avoid the sanity check errors in ToybrainsData
-                            covars_copy.update({f'cov_dummy_{src_node}': {'states': list(v.keys())}})
-                            
-                        # now disable c --> L paths for confounds / mediators 
-                        elif src_node in config_write_kwargs['CONFOUNDERS']+config_write_kwargs['MEDIATORS']:
-                            for src_node_state, vi in v.items():
-                                for dest_node, proba_args in vi.items():
-                                    # we don't disable cov-->y since modifying it can change the variance of y in the test data
-                                    if ('lbl' not in dest_node) and (dest_node != cov): 
-                                        rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
-
-                _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
-                                        config_write_kwargs={},
-                                        n_samples=n_samples_test_ood, show_dag=False, 
-                                        show_probas=None,
-                                        outdir_suffix=outdir_suffix, 
-                                        overwrite_existing=overwrite_existing, 
-                                        gen_images=gen_images,
-                                        n_jobs=n_jobs, verbose=verbose)
+            _gen_toybrains_dataset(split_name, config_fname, covars_copy, rules_cov_out,
+                                    config_write_kwargs={},
+                                    n_samples=n_samples_test_ood, show_dag=False, 
+                                    show_probas=None,
+                                    outdir_suffix=outdir_suffix, 
+                                    overwrite_existing=overwrite_existing, 
+                                    gen_images=gen_images,
+                                    n_jobs=n_jobs, verbose=verbose)
 
         # generate one more test data 'test_none' with all cov-->L effects disabled
-        split='test_none'
+        split_name='test_none'
         rules_cov = deepcopy(rules)
         rules_cov_out = deepcopy(rules)
         covars_copy = deepcopy(covars)
@@ -228,7 +237,7 @@ def gen_toybrains_dataset(config_fname, covars, rules,
                         if ('lbl' not in dest_node): 
                             rules_cov_out[src_node][src_node_state][dest_node] = {'amt': 0}
         
-        _gen_toybrains_dataset(split, config_fname, covars_copy, rules_cov_out,
+        _gen_toybrains_dataset(split_name, config_fname, covars_copy, rules_cov_out,
                                 config_write_kwargs={},
                                 n_samples=n_samples_test_ood, show_dag=False, 
                                 show_probas=None,
@@ -238,10 +247,10 @@ def gen_toybrains_dataset(config_fname, covars, rules,
                                 n_jobs=n_jobs, verbose=verbose)
 
         # Parallel(n_jobs=3, verbose=verbose)(
-        #     delayed(gen_test_data)(split, rules_cov, 
+        #     delayed(gen_test_data)(split_name, rules_cov, 
         #                             n_samples_test_ood, 
         #                             outdir_suffix, overwrite_existing, verbose)
-        #     for split, rules_cov in ood_rules.items())
+        #     for split_name, rules_cov in ood_rules.items())
 
     if return_baseline_results:
 
