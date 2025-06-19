@@ -138,30 +138,34 @@ class ConvBlock(nn.Module):
         return x
     
 class SimpleCNN(nn.Module):
-    def __init__(self, num_classes, final_act_size=64):
+    def __init__(self, num_classes, 
+                act_size_penultimate=64,
+                act_size_antepenultimate=256):
         super().__init__()
-        self.final_act_size = final_act_size # weights + 1 bias
+        self.act_size_penultimate = act_size_penultimate # weights + 1 bias
+        self.act_size_antepenultimate = act_size_antepenultimate # weights + 1 bias
         # convolutional layers
         self.conv = nn.Sequential(
             ConvBlock(in_channels=3, out_channels=16),
             nn.Dropout(0.1),
-            ConvBlock(in_channels=16, out_channels=32),
+            ConvBlock(in_channels=16, out_channels=64),
             nn.Dropout(0.1),
-            ConvBlock(in_channels=32, out_channels=64),
+            ConvBlock(in_channels=64, out_channels=128),
         )
         
         # fully connected layers
         self.fc = nn.Sequential(
             nn.Flatten(),
-            # TODO hardcoded input size
-            nn.Linear(64 * 8 * 8, self.final_act_size, bias=True),
-            nn.Linear(self.final_act_size, num_classes, bias=True),
+            # TODO Hardcoded: expected output of self.conv() would be 8 x 8 if input is 64 x 64
+            nn.Linear(128 * 8 * 8, self.act_size_antepenultimate, bias=True),
+            nn.Linear(self.act_size_antepenultimate, self.act_size_penultimate, bias=True),
+            nn.Linear(self.act_size_penultimate, num_classes, bias=True),
         )
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.fc(x)
-        return x
+        h = self.conv(x)
+        y = self.fc(h)
+        return y
 
 #################################################################################################
 # Visualization
