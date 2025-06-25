@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 import torch.nn as nn
 from torchmetrics import Metric
 import torchvision
+from torchvision import transforms
 # custom imports 
 from utils.metrics import _explained_deviance
 
@@ -18,7 +19,7 @@ from utils.metrics import _explained_deviance
 ###########################################################################################
 
 class ToyBrainsDataloader(Dataset):
-    def __init__(self, img_dir, img_names, labels, transform=None):
+    def __init__(self, img_dir, img_names, labels, transform=transforms.ToTensor()):
         self.img_dir = img_dir
         self.img_names = img_names
         self.labels = labels
@@ -29,6 +30,7 @@ class ToyBrainsDataloader(Dataset):
             # save the encoding as a dict
             self.label_enc = {i:enc.classes_[i] for i in range(len(enc.classes_))}
             self.labels = enc.transform(self.labels)
+        
         self.transform = transform
         
     def __getitem__(self, index):
@@ -146,11 +148,12 @@ class SimpleCNN(nn.Module):
         self.act_size_antepenultimate = act_size_antepenultimate # weights + 1 bias
         # convolutional layers
         self.conv = nn.Sequential(
-            ConvBlock(in_channels=3, out_channels=16),
+            ConvBlock(in_channels=3, out_channels=32),
             nn.Dropout(0.1),
-            ConvBlock(in_channels=16, out_channels=64),
+            ConvBlock(in_channels=32, out_channels=64),
             nn.Dropout(0.1),
             ConvBlock(in_channels=64, out_channels=128),
+            nn.Dropout(0.1),
         )
         
         # fully connected layers
@@ -158,7 +161,9 @@ class SimpleCNN(nn.Module):
             nn.Flatten(),
             # TODO Hardcoded: expected output of self.conv() would be 8 x 8 if input is 64 x 64
             nn.Linear(128 * 8 * 8, self.act_size_antepenultimate, bias=True),
+            nn.Dropout(0.1),
             nn.Linear(self.act_size_antepenultimate, self.act_size_penultimate, bias=True),
+            nn.Dropout(0.1),
             nn.Linear(self.act_size_penultimate, num_classes, bias=True),
         )
 
