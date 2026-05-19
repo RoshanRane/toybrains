@@ -33,19 +33,29 @@ If you use this code in your research or project, please consider citing the fol
 ([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513)) <br>
 BIBTEX:
 ```bibtex
-@software{roshanrane_toybrains_2024,
-  author       = {RoshanRane,
-                  JiHoon Kim, Kerstin Ritter},
-  title        = {RoshanRane/toybrains},
+@software{roshanrane_2024_14509513,
+  author       = {RoshanRane and
+                  JiHoon Kim and
+                  Pfeuffer, Manuel and
+                  Greven, Sonja and
+                  Ritter, Kerstin},
+  title        = {RoshanRane/toybrains: First version (test)},
   month        = dec,
   year         = 2024,
   publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.14509512},
-  url          = {https://doi.org/10.5281/zenodo.14509512},
+  version      = {v1.0.0},
+  doi          = {10.5281/zenodo.14509513},
+  url          = {https://doi.org/10.5281/zenodo.14509513},
+  swhid        = {swh:1:dir:7524e0bdccd7f68e846bf0718833bed8465c8950
+                   ;origin=https://doi.org/10.5281/zenodo.14509512;vi
+                   sit=swh:1:snp:7e80b19669a916e81dc149498e98f3c89d63
+                   4315;anchor=swh:1:rel:c6de2169dcf0fb5591756bb6e8c8
+                   05aba0057987;path=RoshanRane-toybrains-0ce70a7
+                  },
 }
 ```
 
 APA-style:
 ```
-RoshanRane, JiHoon Kim, & Kerstin Ritter. (2024). RoshanRane/toybrains. Zenodo. https://doi.org/10.5281/zenodo.14509512
+RoshanRane, JiHoon Kim, Pfeuffer, M., Greven, S., & Ritter, K. (2024). RoshanRane/toybrains: First version (test) (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.14509513
 ```
