@@ -33,12 +33,13 @@ If you use this code in your research or project, please consider citing the fol
 ([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513)) <br>
 BIBTEX:
 ```bibtex
-@software{toybrains_2024,
+@software{rane2024toybrains,
   author       = {RoshanRane and
                   JiHoon Kim and
+                  Simnacher, Marco and
                   Pfeuffer, Manuel and
                   Greven, Sonja and
-                  Ritter, Kerstin},
+                  Ritter (née Hackmack), Kerstin},
   title        = {Toybrains simulation dataset},
   month        = dec,
   year         = 2024,
@@ -57,5 +58,5 @@ BIBTEX:
 
 APA-style:
 ```
-RoshanRane, JiHoon Kim, Pfeuffer, M., Greven, S., & Ritter, K. (2024). Toybrains simulation dataset (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.14509513
+RoshanRane, JiHoon Kim, Simnacher, M., Pfeuffer, M., Greven, S., & Ritter, K. (2024). Toybrains simulation dataset (v1.0.0). Zenodo. https://doi.org/10.5281/zenodo.14509513
 ```
