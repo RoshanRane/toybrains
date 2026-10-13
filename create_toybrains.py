@@ -574,11 +574,24 @@ a covariate in COVAR, nor is a predifined generative attribute (GENVAR).")
         
         
         
-    def generate_dataset_table(self, n_samples, 
-                               outdir_suffix='', 
-                               outdir_append_sample_size=True, split='train'):
+    def generate_dataset_table(self, n_samples,
+                               outdir_suffix='',
+                               outdir_append_sample_size=True, split='train',
+                               seed=None):
+        # Opt-in, purely additive: reseeding here (immediately before the per-subject sampling
+        # loop below, which is already a plain sequential `for subID in range(n_samples)` with
+        # no parallelism) is sufficient for two calls sharing the same `seed` to draw bitwise-
+        # identical covariate/genvar values for every subject whose sampled states aren't
+        # themselves changed by a RULES_COV_TO_GEN edit (e.g. a single-covariate ablation) --
+        # ablating an edge only changes which *weights* get passed into an unchanged sequence of
+        # `np.random.choice` calls, not how many calls happen or in what order, so the shared
+        # random stream stays aligned subject-for-subject. Default None preserves the exact
+        # historical behavior (no reseed) for every existing caller.
+        if seed is not None:
+            np.random.seed(seed)
+            random.seed(seed)
         self._init_df()
-        
+
         if self.verbose>2:
             print(f"Generative parameter {' '*7}|{' '*7} States \n{'-'*60}")
             for name, var in self.GENVARS.items():
@@ -634,22 +647,32 @@ a covariate in COVAR, nor is a predifined generative attribute (GENVAR).")
     
         
     def generate_dataset_images(self, n_jobs=10,
-                                verbose=1):
+                                verbose=1, seed_base=None):
         """Use the self.df and create the images and store them"""
         n_samples = len(self.df)
         if verbose>0: print("Generating n={} toybrain images".format(n_samples))
         shutil.rmtree(f"{self.DATASET_DIR}/images", ignore_errors=True)
         os.makedirs(f"{self.DATASET_DIR}/images")
         # os.makedirs(f"{self.OUT_DIR}/masks", exist_ok=True)
-        
-        # Generate images and save them 
+
+        # Generate images and save them
         Parallel(n_jobs=n_jobs)(
                             delayed(
-                                self._gen_image)(subidx) 
+                                self._gen_image)(subidx, seed_base=seed_base)
                                     for subidx in tqdm(range(n_samples)))
-            
-            
-    def _gen_image(self, df_idx):
+
+
+    def _gen_image(self, df_idx, seed_base=None):
+        # Opt-in, purely additive: when seed_base is given, per-subject rotation draws use a
+        # local Generator keyed only on (seed_base, df_idx) instead of the shared global
+        # np.random state. This is what actually makes seed-matching work under
+        # Parallel/joblib -- each worker process reseeds fresh from (seed_base, df_idx) right
+        # here, independent of which worker runs it or in what order, so two separate
+        # generate_dataset_images() calls sharing the same seed_base draw bitwise-identical
+        # rotations for the same subject regardless of parallel scheduling. Default None
+        # preserves the exact historical (global np.random, non-reproducible-across-runs)
+        # behavior for every existing caller.
+        rng = np.random.default_rng(seed_base + df_idx) if seed_base is not None else None
         subject = self.df.iloc[df_idx]
         genvars = {}
         for key,val in subject.items():
@@ -695,10 +718,10 @@ a covariate in COVAR, nor is a predifined generative attribute (GENVAR).")
             # the higher the number of sides the higher the total volume of the shape
             n_sides = [3,4,7,12][vol%4]
             
-            draw.regular_polygon((x, y, rad), 
-                                 n_sides=n_sides, 
-                                 rotation=np.random.randint(0,360),
-                                 fill=self.get_color_val(genvars[f'{shape_pos}_int']), 
+            draw.regular_polygon((x, y, rad),
+                                 n_sides=n_sides,
+                                 rotation=(int(rng.integers(0,360)) if rng is not None else np.random.randint(0,360)),
+                                 fill=self.get_color_val(genvars[f'{shape_pos}_int']),
                                  outline=self.get_color_val(genvars['brain-int_border']))
         # (d) save the image
         image.save(f"{self.DATASET_DIR}/images/{subject.name}.jpg")

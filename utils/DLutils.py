@@ -140,12 +140,30 @@ class ConvBlock(nn.Module):
         return x
     
 class SimpleCNN(nn.Module):
-    def __init__(self, num_classes, 
+    # Nonlinearity used between the fc layers (`fc_activation`). 'none' (default) is the purely linear
+    # fc head of v1.0.0 and adds no module, so v1.0.0 state_dicts still load. A linear fc
+    # stack gives every sample an identical gradient direction, which makes TCAV's sign-agreement
+    # score saturate at 1.0 for every concept (degenerate); the ICON experiments therefore use
+    # fc_activation='elu'. ReLU fixes that but can die -- with
+    # Adam at lr=0.01, units are driven permanently negative on the first large steps and the
+    # model sticks at loss = ln(2) with zero gradient forever. ELU has a non-zero gradient for
+    # negative inputs, so a unit can always recover, and it keeps activations closer to
+    # zero-mean, which also spreads representation variance rather than collapsing it (the latter
+    # is what makes ICON's NIPALS deflation singular on narrow heads).
+    _FC_ACTIVATIONS = {'none': None, 'relu': nn.ReLU, 'elu': nn.ELU}
+
+    def __init__(self, num_classes,
                 act_size_penultimate=64,
-                act_size_antepenultimate=256):
+                act_size_antepenultimate=256,
+                fc_activation='none'):
         super().__init__()
         self.act_size_penultimate = act_size_penultimate # weights + 1 bias
         self.act_size_antepenultimate = act_size_antepenultimate # weights + 1 bias
+        assert fc_activation in self._FC_ACTIVATIONS, \
+            f"fc_activation must be one of {list(self._FC_ACTIVATIONS)}, got '{fc_activation}'"
+        self.fc_activation = fc_activation
+        _Act = self._FC_ACTIVATIONS[fc_activation]
+        _act = lambda: [] if _Act is None else [_Act()]
         # convolutional layers
         self.conv = nn.Sequential(
             ConvBlock(in_channels=3, out_channels=32),
@@ -155,14 +173,16 @@ class SimpleCNN(nn.Module):
             ConvBlock(in_channels=64, out_channels=128),
             nn.Dropout(0.1),
         )
-        
+
         # fully connected layers
         self.fc = nn.Sequential(
             nn.Flatten(),
             # TODO Hardcoded: expected output of self.conv() would be 8 x 8 if input is 64 x 64
             nn.Linear(128 * 8 * 8, self.act_size_antepenultimate, bias=True),
+            *_act(),
             nn.Dropout(0.1),
             nn.Linear(self.act_size_antepenultimate, self.act_size_penultimate, bias=True),
+            *_act(),
             nn.Dropout(0.1),
             nn.Linear(self.act_size_penultimate, num_classes, bias=True),
         )

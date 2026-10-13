@@ -28,6 +28,10 @@ TODO
 Causal XAI methods explain ML/DL model decisions in causal terms. That is, they detect whether a variable $c_k$ effects the model predictions $\hat{y}$ as a confounders, or a mediators and measures the effect of $c_k$ on generating $\hat{y}$. When DL models are used in scientific discovery (such as for brain-behaviour discovery using brain MRI), understanding the DL model decisions from a causal perspective becomes foremost important. -->
 
 
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md). **v1.1.0** is the version used by the ICON experiments (arXiv:2608.26083): `SimpleCNN(fc_activation='elu')` and seed-matched dataset generation (`seed`, `seed_base`).
+
+
 ## Citation
 If you use this code in your research or project, please consider citing the following:
 ([The codebase is published with Zenodo](https://doi.org/10.5281/zenodo.14509513)) <br>
