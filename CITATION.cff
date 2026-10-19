@@ -1,0 +1,22 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite the paper (preferred-citation) and, for the exact code version, the Zenodo record."
+title: "Synthetic dataset: Toybrains"
+authors:
+  - family-names: Rane
+    given-names: Roshan Prakash
+    email: roshan-prakash.rane@uni-tuebingen.de
+license: Apache-2.0
+repository-code: "https://github.com/RoshanRane/toybrains"
+version: 1.1.0
+# doi: "10.5281/zenodo.14509512"   
+preferred-citation:
+  type: article
+  title: "ICON decomposition: Auditing neural networks for shortcuts by decomposing layer representations into concepts"
+  authors:
+    - {family-names: Rane, given-names: Roshan Prakash}
+    - {family-names: Kim, given-names: JiHoon}
+    - {family-names: Simnacher, given-names: Marco}
+    - {family-names: Pfeuffer, given-names: Manuel}
+    - {family-names: Greven, given-names: Sonja}
+    - {family-names: Ritter, given-names: Kerstin}
+  year: 2026
